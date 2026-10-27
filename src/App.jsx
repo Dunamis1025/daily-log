@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 /* ───────────── 시간 도구 ─────────────
    모든 시각은 기기의 현지 시간으로 'YYYY-MM-DDTHH:MM' 글자로 저장한다.
@@ -9,6 +9,10 @@ const pad = (n) => String(n).padStart(2, '0');
 const dayStr = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 const timeStr = (d) => `${pad(d.getHours())}:${pad(d.getMinutes())}`;
 const stampStr = (d) => `${dayStr(d)}T${timeStr(d)}`;
+const hm = (s) => {
+  const [h, m] = s.slice(-5).split(':');
+  return `${Number(h)}:${m}`;
+};
 
 function parseStamp(s) {
   const [d, t] = s.split('T');
@@ -39,55 +43,129 @@ function dayLabel(day) {
   const d = parseDay(day);
   return `${d.getMonth() + 1}월 ${d.getDate()}일 (${WEEK[d.getDay()]})`;
 }
+function memoDay(day) {
+  const d = parseDay(day);
+  return `${d.getMonth() + 1}월 ${d.getDate()}일(${WEEK[d.getDay()]})`;
+}
 function entryMin(e) {
   if (!e.end) return null;
   return Math.max(0, Math.round((parseStamp(e.end) - parseStamp(e.start)) / 60000));
 }
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
 
+/* 수정 시각(u): 기기끼리 "누가 더 늦게 고쳤나"를 가릴 때 쓴다. 같은 기기에서는 항상 앞으로만 간다. */
+let lastU = 0;
+const stampU = () => {
+  lastU = Math.max(Date.now(), lastU + 1);
+  return lastU;
+};
+
+function firstGrapheme(s) {
+  const t = String(s || '').trim();
+  if (!t) return '';
+  try {
+    if (typeof Intl !== 'undefined' && Intl.Segmenter) {
+      const seg = new Intl.Segmenter(undefined, { granularity: 'grapheme' });
+      for (const x of seg.segment(t)) return x.segment.slice(0, 16);
+    }
+  } catch {
+    /* 아래 방법으로 */
+  }
+  return Array.from(t).slice(0, 2).join('');
+}
+
 /* ───────────── 저장 / 불러오기 (옛 데이터는 자동으로 정리해서 읽는다) ───────────── */
 
-const KEY = 'dailylog:v1';
+const KEY = 'dailylog:v1'; // 이름은 그대로 두고 안의 구조만 v2로 올림 (옛 기록을 그대로 읽기 위해)
 const STAMP_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/;
+const DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
 
 const DEFAULT_HABITS = [
-  { id: 'h-sleep', name: '수면', emoji: '😴', kind: 'timed' },
-  { id: 'h-ccna', name: 'CCNA 공부', emoji: '📘', kind: 'timed' },
-  { id: 'h-water', name: '따뜻한 물', emoji: '💧', kind: 'check' },
-  { id: 'h-workout', name: '운동', emoji: '🏃', kind: 'timed' },
+  { id: 'h-sleep', name: '수면', emoji: '😴', kind: 'timed', o: 10, u: 1 },
+  { id: 'h-ccna', name: 'CCNA 공부', emoji: '📘', kind: 'timed', o: 20, u: 1 },
+  { id: 'h-water', name: '따뜻한 물', emoji: '💧', kind: 'check', o: 30, u: 1 },
+  { id: 'h-workout', name: '운동', emoji: '🏃', kind: 'timed', o: 40, u: 1 },
 ];
+const DEFAULT_PHRASES = [
+  '따뜻한 물 한 잔',
+  '탈모약',
+  '프로바이오틱스',
+  '삶은 계란 세 개',
+  '커피 한 잔',
+  '샤워',
+  '낮잠',
+  '산책',
+  '식세기 돌림',
+].map((text, i) => ({ id: `p-${i + 1}`, text, o: (i + 1) * 10, u: 1 }));
 
-function normalizeHabit(h) {
+const byO = (a, b) => a.o - b.o;
+const num = (x, fallback) => (Number.isFinite(x) ? x : fallback);
+
+function normalizeHabit(h, idx = 0) {
   if (!h || typeof h !== 'object') return null;
-  const name = String(h.name || '').trim();
+  const name = String(h.name || '').trim().slice(0, 20);
   if (!name) return null;
   return {
     id: String(h.id || uid()),
     name,
-    emoji: Array.from(String(h.emoji || '')).slice(0, 2).join(''),
+    emoji: firstGrapheme(h.emoji),
     kind: h.kind === 'check' ? 'check' : 'timed',
+    o: num(h.o, (idx + 1) * 10),
+    u: num(h.u, 1),
   };
+}
+
+function normalizePhrase(p, idx = 0) {
+  if (!p || typeof p !== 'object') return null;
+  const text = String(p.text || '').trim().slice(0, 60);
+  if (!text) return null;
+  return { id: String(p.id || uid()), text, o: num(p.o, (idx + 1) * 10), u: num(p.u, 1) };
 }
 
 function normalizeEntry(e) {
   if (!e || typeof e !== 'object' || typeof e.start !== 'string' || !STAMP_RE.test(e.start)) return null;
-  const kind = e.kind === 'check' ? 'check' : 'timed';
-  const end = kind === 'timed' && typeof e.end === 'string' && STAMP_RE.test(e.end) ? e.end.slice(0, 16) : null;
-  const name = String(e.name || '').trim() || '이름 없음';
+  const start = e.start.slice(0, 16);
+  const habitId = e.habitId ? String(e.habitId) : '';
+  let kind = e.kind === 'check' ? 'check' : 'timed';
+  let end = kind === 'timed' && typeof e.end === 'string' && STAMP_RE.test(e.end) ? e.end.slice(0, 16) : null;
+  let name = String(e.name || '').trim().slice(0, 20);
+  if (!name && habitId) name = '이름 없음';
+  if (kind === 'timed' && !end && !habitId) kind = 'check'; // 항목 없는 기록은 끝이 없으면 "시각 메모"
+  if (kind === 'check') end = null;
+  let u = e.u;
+  if (!Number.isFinite(u)) {
+    const t = parseStamp(start).getTime();
+    u = Number.isFinite(t) ? t : 1;
+  }
   return {
     id: String(e.id || uid()),
-    habitId: String(e.habitId || `x-${name}`),
+    habitId,
     name,
-    emoji: Array.from(String(e.emoji || '')).slice(0, 2).join(''),
+    emoji: firstGrapheme(e.emoji),
     kind,
-    start: e.start.slice(0, 16),
+    start,
     end,
-    note: String(e.note || ''),
+    note: String(e.note || '').slice(0, 4000),
+    u,
   };
 }
 
+function normalizeDay(date, d) {
+  if (!DAY_RE.test(date) || !d || typeof d !== 'object') return null;
+  return { text: String(d.text || '').slice(0, 20000), u: num(d.u, 1) };
+}
+
 function freshData(notice) {
-  return { habits: DEFAULT_HABITS, entries: [], lastBackup: null, notice: notice || null };
+  return {
+    habits: DEFAULT_HABITS,
+    phrases: DEFAULT_PHRASES,
+    entries: [],
+    days: {},
+    gone: {},
+    sync: { key: '', seq: 0, pushedU: 0, last: null },
+    lastBackup: null,
+    notice: notice || null,
+  };
 }
 
 function loadData() {
@@ -100,9 +178,26 @@ function loadData() {
   if (!raw) return freshData();
   try {
     const d = JSON.parse(raw);
-    const habits = Array.isArray(d.habits) ? d.habits.map(normalizeHabit).filter(Boolean) : DEFAULT_HABITS;
-    const entries = Array.isArray(d.entries) ? d.entries.map(normalizeEntry).filter(Boolean) : [];
-    return { habits, entries, lastBackup: d.lastBackup || null, notice: null };
+    const habits = (Array.isArray(d.habits) ? d.habits : DEFAULT_HABITS).map(normalizeHabit).filter(Boolean).sort(byO);
+    const phrases = (Array.isArray(d.phrases) ? d.phrases : DEFAULT_PHRASES).map(normalizePhrase).filter(Boolean).sort(byO);
+    const entries = (Array.isArray(d.entries) ? d.entries : []).map(normalizeEntry).filter(Boolean);
+    const days = {};
+    Object.entries(d.days && typeof d.days === 'object' ? d.days : {}).forEach(([k, v]) => {
+      const n = normalizeDay(k, v);
+      if (n) days[k] = n;
+    });
+    const gone = {};
+    Object.entries(d.gone && typeof d.gone === 'object' ? d.gone : {}).forEach(([k, v]) => {
+      if (Number.isFinite(v) && /^[hped]:/.test(k)) gone[k] = v;
+    });
+    const s = d.sync && typeof d.sync === 'object' ? d.sync : {};
+    const sync = {
+      key: typeof s.key === 'string' ? s.key : '',
+      seq: num(s.seq, 0),
+      pushedU: num(s.pushedU, 0),
+      last: typeof s.last === 'string' ? s.last : null,
+    };
+    return { habits, phrases, entries, days, gone, sync, lastBackup: d.lastBackup || null, notice: null };
   } catch {
     // 읽을 수 없는 데이터는 지우지 않고 따로 보관한다.
     try {
@@ -114,28 +209,170 @@ function loadData() {
   }
 }
 
+function persist(d) {
+  try {
+    localStorage.setItem(
+      KEY,
+      JSON.stringify({
+        version: 2,
+        habits: d.habits,
+        phrases: d.phrases,
+        entries: d.entries,
+        days: d.days,
+        gone: d.gone,
+        sync: d.sync,
+        lastBackup: d.lastBackup,
+      })
+    );
+  } catch {
+    /* 저장 공간이 막힌 경우는 시작할 때 안내 */
+  }
+}
+
+/* ───────────── 동기화: 바뀐 것만 모으기 / 받은 것 합치기 ───────────── */
+
+function collectChanges(d, since) {
+  const out = [];
+  const strip = ({ u, ...rest }) => rest; // eslint-disable-line no-unused-vars
+  d.habits.forEach((x) => x.u > since && out.push({ key: `h:${x.id}`, v: strip(x), u: x.u }));
+  d.phrases.forEach((x) => x.u > since && out.push({ key: `p:${x.id}`, v: strip(x), u: x.u }));
+  d.entries.forEach((x) => x.u > since && out.push({ key: `e:${x.id}`, v: strip(x), u: x.u }));
+  Object.entries(d.days).forEach(([date, x]) => x.u > since && out.push({ key: `d:${date}`, v: { text: x.text }, u: x.u }));
+  Object.entries(d.gone).forEach(([key, u]) => u > since && out.push({ key, v: null, u }));
+  return out.sort((a, b) => a.u - b.u);
+}
+
+function hasUnpushed(d) {
+  const p = d.sync.pushedU;
+  return (
+    d.habits.some((x) => x.u > p) ||
+    d.phrases.some((x) => x.u > p) ||
+    d.entries.some((x) => x.u > p) ||
+    Object.values(d.days).some((x) => x.u > p) ||
+    Object.values(d.gone).some((u) => u > p)
+  );
+}
+
+function applyRemote(d, recs) {
+  const maps = {
+    h: new Map(d.habits.map((x) => [x.id, x])),
+    p: new Map(d.phrases.map((x) => [x.id, x])),
+    e: new Map(d.entries.map((x) => [x.id, x])),
+  };
+  const days = { ...d.days };
+  const gone = { ...d.gone };
+  let changed = false;
+
+  recs.forEach((r) => {
+    if (!r || typeof r.key !== 'string' || !Number.isFinite(r.u)) return;
+    const i = r.key.indexOf(':');
+    const kind = r.key.slice(0, i);
+    const id = r.key.slice(i + 1);
+    if (!['h', 'p', 'e', 'd'].includes(kind) || !id) return;
+    const cur = kind === 'd' ? days[id] : maps[kind].get(id);
+    const localU = Math.max(gone[r.key] || 0, cur ? cur.u : 0);
+    if (r.u <= localU) return; // 내 쪽이 더 최근이거나 같음
+
+    if (r.v === null) {
+      if (kind === 'd') delete days[id];
+      else maps[kind].delete(id);
+      gone[r.key] = r.u;
+      changed = true;
+      return;
+    }
+    let item = null;
+    if (kind === 'h') item = normalizeHabit({ ...r.v, id, u: r.u });
+    else if (kind === 'p') item = normalizePhrase({ ...r.v, id, u: r.u });
+    else if (kind === 'e') item = normalizeEntry({ ...r.v, id, u: r.u });
+    else item = normalizeDay(id, { ...r.v, u: r.u });
+    if (!item) return;
+    if (kind === 'd') days[id] = item;
+    else maps[kind].set(id, kind === 'e' ? { ...item, id } : item);
+    delete gone[r.key];
+    changed = true;
+  });
+
+  if (!changed) return d;
+  return {
+    ...d,
+    habits: [...maps.h.values()].sort(byO),
+    phrases: [...maps.p.values()].sort(byO),
+    entries: [...maps.e.values()],
+    days,
+    gone,
+  };
+}
+
+async function postSync(key, body) {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 20000);
+  let r;
+  try {
+    r = await fetch('/api/sync', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-sync-key': key },
+      body: JSON.stringify(body),
+      signal: ctrl.signal,
+    });
+  } finally {
+    clearTimeout(timer);
+  }
+  let j = null;
+  try {
+    j = await r.json();
+  } catch {
+    /* 본문이 JSON이 아님 */
+  }
+  if (r.ok && j && Array.isArray(j.records)) return j;
+  const err = new Error('sync');
+  if (r.status === 401) err.code = 'auth';
+  else if (r.status === 404 || (j && j.error === 'not-configured')) err.code = 'noserver';
+  else if (r.status === 502) err.code = 'store';
+  else err.code = 'error';
+  throw err;
+}
+
+const SYNC_TEXT = {
+  off: '연결 안 됨',
+  idle: '대기 중',
+  syncing: '동기화 중…',
+  ok: '동기화됨',
+  offline: '인터넷이 안 돼요. 연결되면 다시 시도해요',
+  auth: '동기화 암호가 맞지 않아요',
+  noserver: '서버 설정이 아직 안 됐어요 (Vercel에서 Upstash 연결과 SYNC_KEY가 필요해요)',
+  store: '저장소(Upstash)에 연결하지 못했어요',
+  error: '동기화 중 오류가 났어요',
+};
+
 /* ───────────── 메모장용 글 만들기 ───────────── */
 
-function buildSummary(day, list) {
-  const lines = [dayLabel(day)];
+function buildSummary(day, list, diary) {
+  const lines = [memoDay(day)];
   const totals = new Map();
   const sorted = [...list].sort((a, b) => (a.start < b.start ? -1 : 1));
   sorted.forEach((e) => {
-    const t = e.start.slice(11);
     const carry = e.start.slice(0, 10) !== day ? '(전날) ' : '';
-    const note = e.note.trim() ? ` - ${e.note.trim()}` : '';
+    const note = e.note.trim();
+    let time;
+    let head = '';
     if (e.kind === 'check') {
-      lines.push(`- ${t} ${e.name}${note}`);
+      time = hm(e.start);
+      head = e.name;
     } else if (e.end) {
       const min = entryMin(e);
-      lines.push(`- ${carry}${t}~${e.end.slice(11)} ${e.name} (${fmtDur(min)})${note}`);
-      if (!carry) totals.set(e.name, (totals.get(e.name) || 0) + min);
+      time = `${hm(e.start)} - ${hm(e.end)}`;
+      if (e.name) head = `${e.name} (${fmtDur(min)})`;
+      if (e.name && !carry) totals.set(e.name, (totals.get(e.name) || 0) + min);
     } else {
-      lines.push(`- ${t}~ ${e.name} (진행 중)${note}`);
+      time = `${hm(e.start)} -`;
+      head = e.name ? `${e.name} (진행 중)` : '';
     }
+    const body = [head, note].filter(Boolean).join(' ');
+    lines.push(`${carry}${time}${body ? ` ${body}` : ''}`);
   });
   const sums = [...totals.entries()].filter(([, m]) => m > 0).map(([n, m]) => `${n} ${fmtDur(m)}`);
   if (sums.length) lines.push('', `합계: ${sums.join(' / ')}`);
+  if (diary && diary.trim()) lines.push('', diary.trim());
   return lines.join('\n');
 }
 
@@ -165,33 +402,61 @@ async function copyText(text) {
   }
 }
 
-/* ───────────── 앱 ───────────── */
+/* ───────────── 아이콘(이모지) ───────────── */
 
-const EMOJIS = ['📘', '😴', '💧', '🏃', '🙏', '📖', '💻', '🎧', '🍚', '💊', '🧹', '☀️'];
+const EMOJI_GROUPS = [
+  ['공부·일', '📘 📖 📚 ✏️ 📝 💻 🎓 🧠 🌐 🗣️ 🎧 🔤 📊 🗂️'],
+  ['건강', '💧 💊 🏃 🏋️ 🚶 🧘 🦷 🚿 🛁 😴 🛌 🩺 🧴'],
+  ['음식', '☕ 🍚 🍳 🥚 🥗 🍜 🍕 🍷 🍎 🥛 🍱 🍗 🍞 🍺'],
+  ['생활', '🧹 🧺 🍽️ 🌱 🌿 🚗 🛒 💰 📞 🏠 ✂️ 🧼 🔧 📦'],
+  ['여가·SNS', '📱 📸 🎨 🖌️ 🎮 🎬 📺 🎵 🎤 📷 🎞️ ✈️ ⛺ 🏖️'],
+  ['마음·관계', '🙏 ⛪ ❤️ 👫 👶 💬 🎁 😊'],
+  ['기타', '☀️ 🌙 ⭐ 🔥 ⏰ 🗓️ ✅ 📌'],
+].map(([label, s]) => [label, s.split(' ')]);
+
+/* ───────────── 여러 줄 입력칸 (글이 길어지면 같이 커짐) ───────────── */
+
+function AutoTextarea({ value, onChange, minRows, taRef, ...rest }) {
+  const local = useRef(null);
+  const ref = taRef || local;
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    el.style.height = 'auto';
+    el.style.height = `${el.scrollHeight}px`;
+  }, [value, ref]);
+  return <textarea ref={ref} rows={minRows || 4} value={value} onChange={onChange} {...rest} />;
+}
+
+/* ───────────── 앱 ───────────── */
 
 export default function App() {
   const [data, setData] = useState(loadData);
   const [tab, setTab] = useState('today');
   const [now, setNow] = useState(() => new Date());
   const [day, setDay] = useState(() => dayStr(new Date()));
-  const [sheet, setSheet] = useState(null); // { type: 'entry', draft, isNew } | { type: 'habit', habit }
-  const [toast, setToast] = useState(null); // { msg, undo }
+  const [sheet, setSheet] = useState(null); // { type: 'entry', draft, isNew, prevEnd } | { type: 'habit', habit }
+  const [toast, setToast] = useState(null); // { msg, undo, act }
   const [armedId, setArmedId] = useState(null);
+  const [syncStatus, setSyncStatus] = useState(() => ({ phase: data.sync.key ? 'idle' : 'off', at: null }));
 
-  const { habits, entries } = data;
+  const dataRef = useRef(data);
+  dataRef.current = data;
+  const statusRef = useRef(syncStatus.phase);
+  statusRef.current = syncStatus.phase;
+  const syncing = useRef(false);
+  const again = useRef(false);
+  const runSyncRef = useRef(null);
+
+  const { habits, phrases, entries } = data;
   const today = dayStr(now);
 
+  /* 저장 */
   useEffect(() => {
-    try {
-      localStorage.setItem(
-        KEY,
-        JSON.stringify({ version: 1, habits: data.habits, entries: data.entries, lastBackup: data.lastBackup })
-      );
-    } catch {
-      /* 저장 공간이 막힌 경우는 시작할 때 안내 */
-    }
+    persist(data);
   }, [data]);
 
+  /* 시계 */
   useEffect(() => {
     const tick = () => setNow(new Date());
     const id = setInterval(tick, 20000);
@@ -207,18 +472,166 @@ export default function App() {
 
   useEffect(() => {
     if (!toast) return undefined;
-    const id = setTimeout(() => setToast(null), 5000);
+    const id = setTimeout(() => setToast(null), toast.act ? 7000 : 5000);
     return () => clearTimeout(id);
   }, [toast]);
 
-  const setEntries = (fn) => setData((d) => ({ ...d, entries: fn(d.entries) }));
-  const setHabits = (fn) => setData((d) => ({ ...d, habits: fn(d.habits) }));
-  const upsertEntry = (entry) =>
-    setEntries((list) =>
-      list.some((x) => x.id === entry.id) ? list.map((x) => (x.id === entry.id ? entry : x)) : [...list, entry]
-    );
-  const removeEntry = (id) => setEntries((list) => list.filter((x) => x.id !== id));
+  /* ── 동기화 ── */
+  const runSync = useCallback(async (opts) => {
+    const key = dataRef.current.sync.key;
+    if (!key) return;
+    if (syncing.current) {
+      again.current = true;
+      return;
+    }
+    syncing.current = true;
+    setSyncStatus((s) => ({ ...s, phase: 'syncing' }));
+    const full = !!(opts && opts.full);
+    try {
+      const snap = dataRef.current;
+      const startSince = full ? 0 : snap.sync.seq;
+      const changes = collectChanges(snap, full ? 0 : snap.sync.pushedU);
+      const maxSent = changes.reduce((m, c) => Math.max(m, c.u), 0);
+      const queue = [];
+      for (let i = 0; i < changes.length; i += 300) queue.push(changes.slice(i, i + 300));
 
+      let next = startSince;
+      let first = true;
+      for (let guard = 0; guard < 200; guard += 1) {
+        const chunk = queue.length ? queue.shift() : [];
+        // 처음 한 번은 조금 겹치게 받아서(20칸) 동시에 쓴 기록을 놓치지 않게 한다
+        const res = await postSync(key, { since: first ? Math.max(0, startSince - 20) : next, changes: chunk });
+        if (first && !full && res.next < startSince) {
+          const err = new Error('reset'); // 서버 기록이 비워진 경우 → 전부 다시 올린다
+          err.code = 'reset';
+          throw err;
+        }
+        setData((d) => applyRemote(d, res.records));
+        next = res.next;
+        first = false;
+        if (!queue.length && !res.more) break;
+      }
+      setData((d) => ({
+        ...d,
+        sync: {
+          ...d.sync,
+          seq: Math.max(next, full ? 0 : d.sync.seq),
+          pushedU: Math.max(full ? 0 : d.sync.pushedU, maxSent),
+          last: new Date().toISOString(),
+        },
+      }));
+      setSyncStatus({ phase: 'ok', at: Date.now() });
+    } catch (e) {
+      if (e && e.code === 'reset') {
+        syncing.current = false;
+        setTimeout(() => runSyncRef.current && runSyncRef.current({ full: true }), 50);
+        return;
+      }
+      setSyncStatus({ phase: (e && e.code) || 'offline', at: Date.now() });
+    } finally {
+      syncing.current = false;
+      if (again.current) {
+        again.current = false;
+        setTimeout(() => runSyncRef.current && runSyncRef.current(), 300);
+      }
+    }
+  }, []);
+  runSyncRef.current = runSync;
+
+  // 앱을 열 때, 다시 화면으로 돌아올 때, 인터넷이 돌아올 때, 가끔씩
+  useEffect(() => {
+    if (dataRef.current.sync.key) runSync();
+    const go = () => {
+      if (document.visibilityState === 'visible' && dataRef.current.sync.key) runSync();
+    };
+    const online = () => dataRef.current.sync.key && runSync();
+    document.addEventListener('visibilitychange', go);
+    window.addEventListener('online', online);
+    const id = setInterval(go, 90000);
+    return () => {
+      document.removeEventListener('visibilitychange', go);
+      window.removeEventListener('online', online);
+      clearInterval(id);
+    };
+  }, [runSync]);
+
+  // 내가 고친 게 있으면 잠깐 뒤에 올린다
+  useEffect(() => {
+    if (!data.sync.key || !hasUnpushed(data)) return undefined;
+    if (statusRef.current === 'auth' || statusRef.current === 'noserver') return undefined;
+    const id = setTimeout(() => runSync(), 1500);
+    return () => clearTimeout(id);
+  }, [data, runSync]);
+
+  /* ── 기록 고치기 (고칠 때마다 수정 시각 u를 새로 찍는다) ── */
+  const showToast = (msg, undo, act) => setToast({ msg, undo: undo || null, act: act || null });
+
+  const upsertEntry = (entry) =>
+    setData((d) => {
+      const e = { ...entry, u: stampU() };
+      const gone = { ...d.gone };
+      delete gone[`e:${e.id}`];
+      const has = d.entries.some((x) => x.id === e.id);
+      return { ...d, entries: has ? d.entries.map((x) => (x.id === e.id ? e : x)) : [...d.entries, e], gone };
+    });
+  const removeEntry = (id) =>
+    setData((d) => ({ ...d, entries: d.entries.filter((x) => x.id !== id), gone: { ...d.gone, [`e:${id}`]: stampU() } }));
+
+  function saveHabit(h, isNew) {
+    setData((d) => {
+      const maxO = d.habits.reduce((m, x) => Math.max(m, x.o), 0);
+      const item = { ...h, o: isNew ? maxO + 10 : h.o, u: stampU() };
+      const gone = { ...d.gone };
+      delete gone[`h:${item.id}`];
+      if (isNew) return { ...d, habits: [...d.habits, item], gone };
+      return {
+        ...d,
+        habits: d.habits.map((x) => (x.id === item.id ? item : x)),
+        entries: d.entries.map((e) =>
+          e.habitId === item.id && (e.name !== item.name || e.emoji !== item.emoji)
+            ? { ...e, name: item.name, emoji: item.emoji, u: stampU() }
+            : e
+        ),
+        gone,
+      };
+    });
+  }
+  const deleteHabit = (id) =>
+    setData((d) => ({ ...d, habits: d.habits.filter((x) => x.id !== id), gone: { ...d.gone, [`h:${id}`]: stampU() } }));
+  function moveHabit(id, dir) {
+    setData((d) => {
+      const i = d.habits.findIndex((x) => x.id === id);
+      const j = i + dir;
+      if (i < 0 || j < 0 || j >= d.habits.length) return d;
+      const a = d.habits[i];
+      const b = d.habits[j];
+      const na = { ...a, o: b.o, u: stampU() };
+      const nb = { ...b, o: a.o, u: stampU() };
+      return { ...d, habits: d.habits.map((x) => (x.id === a.id ? na : x.id === b.id ? nb : x)).sort(byO) };
+    });
+  }
+
+  function addPhrase(text) {
+    const t = String(text || '').trim().slice(0, 60);
+    if (!t) return false;
+    setData((d) => {
+      if (d.phrases.some((p) => p.text === t)) return d;
+      const maxO = d.phrases.reduce((m, x) => Math.max(m, x.o), 0);
+      return { ...d, phrases: [...d.phrases, { id: `p-${uid()}`, text: t, o: maxO + 10, u: stampU() }] };
+    });
+    return true;
+  }
+  const deletePhrase = (id) =>
+    setData((d) => ({ ...d, phrases: d.phrases.filter((x) => x.id !== id), gone: { ...d.gone, [`p:${id}`]: stampU() } }));
+
+  function setDiary(date, text) {
+    setData((d) => {
+      if (!text && !d.days[date]) return d;
+      return { ...d, days: { ...d.days, [date]: { text, u: stampU() } } };
+    });
+  }
+
+  /* ── 보여 줄 것 계산 ── */
   const running = useMemo(
     () => entries.filter((e) => e.kind === 'timed' && !e.end).sort((a, b) => (a.start < b.start ? -1 : 1)),
     [entries]
@@ -236,26 +649,55 @@ export default function App() {
     [entries, day]
   );
 
+  const diaryText = (data.days[day] || {}).text || '';
+
   const summary = useMemo(
-    () => buildSummary(day, [...dayEntries, ...running.filter((e) => e.start.slice(0, 10) === day)]),
-    [day, dayEntries, running]
+    () => buildSummary(day, [...dayEntries, ...running.filter((e) => e.start.slice(0, 10) === day)], diaryText),
+    [day, dayEntries, running, diaryText]
   );
 
   const dayTotals = useMemo(() => {
     const m = new Map();
     dayEntries.forEach((e) => {
-      if (e.kind !== 'timed' || !e.end || e.start.slice(0, 10) !== day) return;
-      const key = e.habitId;
-      const cur = m.get(key) || { name: e.name, emoji: e.emoji, min: 0 };
+      if (e.kind !== 'timed' || !e.end || !e.habitId || e.start.slice(0, 10) !== day) return;
+      const cur = m.get(e.habitId) || { name: e.name, emoji: e.emoji, min: 0 };
       cur.min += entryMin(e);
-      m.set(key, cur);
+      m.set(e.habitId, cur);
     });
     return [...m.values()].filter((x) => x.min > 0);
   }, [dayEntries, day]);
 
-  /* 빠른 기록 */
-  function showToast(msg, undo) {
-    setToast({ msg, undo: undo || null });
+  // 그 날(day)에서 지금(또는 하루 끝)까지 가장 늦게 끝난 기록의 끝 시각
+  function lastEndOf(dayS, limitStamp) {
+    let best = null;
+    entries.forEach((e) => {
+      if (e.kind === 'timed' && !e.end) return;
+      const stamp = e.end || e.start;
+      if (e.start.slice(0, 10) !== dayS && stamp.slice(0, 10) !== dayS) return;
+      if (limitStamp && stamp > limitStamp) return;
+      if (!best || stamp > best) best = stamp;
+    });
+    return best;
+  }
+  const prevEndHint = lastEndOf(day, day === today ? stampStr(now) : null);
+
+  /* ── 빠른 기록 ── */
+  function openEditEntry(e, isNew) {
+    setArmedId(null);
+    setSheet({
+      type: 'entry',
+      isNew: !!isNew,
+      prevEnd: null,
+      draft: {
+        id: e.id,
+        habitId: e.habitId || '',
+        date: e.start.slice(0, 10),
+        start: e.start.slice(11),
+        end: e.end ? e.end.slice(11) : '',
+        note: e.note,
+        ghost: e.habitId ? { id: e.habitId, name: e.name, emoji: e.emoji, kind: e.kind } : null,
+      },
+    });
   }
 
   function quick(h) {
@@ -267,7 +709,9 @@ export default function App() {
         start: stampStr(t), end: null, note: '',
       };
       upsertEntry(entry);
-      showToast(`${h.name} · ${timeStr(t)} 기록했어요`, () => removeEntry(entry.id));
+      showToast(`${h.name} · ${timeStr(t)} 기록했어요`, () => removeEntry(entry.id), {
+        label: '메모', fn: () => openEditEntry(entry),
+      });
       return;
     }
     const run = entries.find((e) => e.habitId === h.id && e.kind === 'timed' && !e.end);
@@ -287,76 +731,61 @@ export default function App() {
     const t = new Date();
     let endStamp = stampStr(t);
     if (endStamp < run.start) endStamp = run.start;
-    upsertEntry({ ...run, end: endStamp });
+    const done = { ...run, end: endStamp };
+    upsertEntry(done);
     const min = Math.max(0, Math.round((parseStamp(endStamp) - parseStamp(run.start)) / 60000));
-    showToast(`${run.name} 끝 · ${fmtDur(min)}`, () => upsertEntry({ ...run, end: null }));
+    showToast(`${run.name} 끝 · ${fmtDur(min)}`, () => upsertEntry({ ...run, end: null }), {
+      label: '메모', fn: () => openEditEntry(done),
+    });
     setDay(dayStr(t));
   }
 
-  /* 시트 열기 */
+  /* ── 기록 추가: 직전 기록이 끝난 시각에서 이어서 시작 ── */
   function openAdd() {
     const t = new Date();
-    const lastHabit = entries.length ? entries[entries.length - 1].habitId : '';
-    const habitId = habits.some((h) => h.id === lastHabit) ? lastHabit : habits[0] ? habits[0].id : '';
-    let date;
-    let start;
-    let end;
-    if (day === dayStr(t)) {
-      const s = new Date(t.getTime() - 30 * 60000);
-      date = dayStr(s);
-      start = timeStr(s);
-      end = timeStr(t);
+    const nowStamp = stampStr(t);
+    const prev = lastEndOf(day, day === today ? nowStamp : null);
+    let startStamp;
+    let endTime;
+    if (day === today) {
+      if (prev) {
+        startStamp = prev;
+        endTime = nowStamp > prev ? timeStr(t) : '';
+      } else {
+        const s = new Date(t.getTime() - 30 * 60000);
+        startStamp = stampStr(s);
+        endTime = timeStr(t);
+      }
+    } else if (prev) {
+      startStamp = prev;
+      endTime = timeStr(new Date(parseStamp(prev).getTime() + 30 * 60000));
     } else {
-      date = day;
-      start = '09:00';
-      end = '09:30';
+      startStamp = `${day}T09:00`;
+      endTime = '09:30';
     }
-    setSheet({ type: 'entry', isNew: true, draft: { id: uid(), habitId, date, start, end, note: '' } });
+    setSheet({
+      type: 'entry',
+      isNew: true,
+      prevEnd: prev,
+      draft: {
+        id: uid(), habitId: '', date: startStamp.slice(0, 10), start: startStamp.slice(11),
+        end: endTime, note: '', ghost: null,
+      },
+    });
   }
 
   function openEdit(id) {
     const e = entries.find((x) => x.id === id);
-    if (!e) return;
-    setArmedId(null);
-    setSheet({
-      type: 'entry',
-      isNew: false,
-      draft: {
-        id: e.id, habitId: e.habitId, date: e.start.slice(0, 10), start: e.start.slice(11),
-        end: e.end ? e.end.slice(11) : '', note: e.note,
-        ghost: { id: e.habitId, name: e.name, emoji: e.emoji, kind: e.kind },
-      },
-    });
+    if (e) openEditEntry(e, false);
   }
 
   function saveEntry(entry) {
     upsertEntry(entry);
     setSheet(null);
-    setDay(entry.start.slice(0, 10));
-  }
-
-  function saveHabit(h, isNew) {
-    if (isNew) {
-      setHabits((list) => [...list, h]);
-    } else {
-      setHabits((list) => list.map((x) => (x.id === h.id ? h : x)));
-      setEntries((list) => list.map((e) => (e.habitId === h.id ? { ...e, name: h.name, emoji: h.emoji } : e)));
-    }
-  }
-
-  function deleteHabit(id) {
-    setHabits((list) => list.filter((x) => x.id !== id));
-  }
-
-  function moveHabit(id, dir) {
-    setHabits((list) => {
-      const i = list.findIndex((x) => x.id === id);
-      const j = i + dir;
-      if (i < 0 || j < 0 || j >= list.length) return list;
-      const copy = [...list];
-      [copy[i], copy[j]] = [copy[j], copy[i]];
-      return copy;
-    });
+    // 지금 보던 날에 걸쳐 있는 기록이면 그 화면에 그대로 있고, 아니면 기록이 있는 날로 이동
+    const sd = entry.start.slice(0, 10);
+    const ed = (entry.end || entry.start).slice(0, 10);
+    if (sd !== day && ed !== day) setDay(sd);
   }
 
   async function copySummary() {
@@ -364,8 +793,28 @@ export default function App() {
     showToast(ok ? '복사했어요. 메모장에 붙여넣으세요' : '복사가 안 됐어요. 아래 글을 길게 눌러 복사해 주세요');
   }
 
+  /* ── 동기화 설정 화면에서 쓰는 동작 ── */
+  function connectSync(key) {
+    const k = String(key || '').trim();
+    if (!k) return;
+    setData((d) => ({ ...d, sync: { ...d.sync, key: k } }));
+    setSyncStatus({ phase: 'syncing', at: null });
+    setTimeout(() => runSync(), 80);
+  }
+  function disconnectSync() {
+    setData((d) => ({ ...d, sync: { key: '', seq: 0, pushedU: 0, last: null } }));
+    setSyncStatus({ phase: 'off', at: null });
+  }
+
   const isRunning = (h) => running.some((e) => e.habitId === h.id);
   const dayTag = day === today ? '오늘' : day === addDays(today, -1) ? '어제' : '';
+  const chip = (() => {
+    if (!data.sync.key) return null;
+    const p = syncStatus.phase;
+    if (p === 'syncing' || p === 'idle') return { icon: '⏳', text: '동기화 중' };
+    if (p === 'ok') return { icon: '☁️', text: '동기화됨' };
+    return { icon: '⚠️', text: '동기화 확인' };
+  })();
 
   return (
     <div className="app" onClick={() => armedId && setArmedId(null)}>
@@ -373,6 +822,11 @@ export default function App() {
         <>
           <header className="topbar">
             <h1>일과 기록</h1>
+            {chip && (
+              <button className={chip.icon === '⚠️' ? 'syncchip warn' : 'syncchip'} onClick={() => setTab('settings')}>
+                {chip.icon} {chip.text}
+              </button>
+            )}
           </header>
 
           <div className="daynav">
@@ -426,11 +880,16 @@ export default function App() {
             </button>
           </div>
 
-          <button className="primary wide" onClick={openAdd}>시간 직접 입력해서 추가</button>
+          <button className="primary wide addbtn" onClick={openAdd}>
+            <span>＋ 기록 추가</span>
+            <span className="addhint">
+              {prevEndHint ? `직전 기록이 끝난 ${hm(prevEndHint)}부터 이어서 적어요` : '시간과 내용을 자세히 적어요'}
+            </span>
+          </button>
 
           <h2 className="sec">{day === today ? '오늘 기록' : '이 날의 기록'}</h2>
           {dayEntries.length === 0 ? (
-            <p className="empty">아직 기록이 없어요. 위 항목을 탭하면 바로 기록돼요.</p>
+            <p className="empty">아직 기록이 없어요. 위 항목을 탭하거나 "기록 추가"로 적어 보세요.</p>
           ) : (
             <ul className="list">
               {dayEntries.map((e) => (
@@ -445,12 +904,23 @@ export default function App() {
                     const old = entries.find((x) => x.id === id);
                     removeEntry(id);
                     setArmedId(null);
-                    if (old) showToast(`${old.name} 기록을 지웠어요`, () => upsertEntry(old));
+                    if (old) showToast(`${old.name || '기록'}을(를) 지웠어요`, () => upsertEntry(old));
                   }}
                 />
               ))}
             </ul>
           )}
+
+          <div className="card diary">
+            <h2 className="sec nomargin">하루 일기</h2>
+            <AutoTextarea
+              className="text area"
+              minRows={3}
+              placeholder="오늘 하루 어땠는지, 마음에 남는 것, 내일의 다짐…"
+              value={diaryText}
+              onChange={(e) => setDiary(day, e.target.value)}
+            />
+          </div>
 
           <div className="card summary">
             <div className="card-head">
@@ -475,8 +945,15 @@ export default function App() {
         <Settings
           data={data}
           setData={setData}
+          syncStatus={syncStatus}
+          onConnect={connectSync}
+          onDisconnect={disconnectSync}
+          onSyncNow={() => runSync()}
+          onResync={() => runSync({ full: true })}
           onEditHabit={(h) => setSheet({ type: 'habit', habit: h })}
           onMove={moveHabit}
+          onAddPhrase={addPhrase}
+          onDeletePhrase={deletePhrase}
           showToast={showToast}
         />
       )}
@@ -496,26 +973,34 @@ export default function App() {
 
       {toast && (
         <div className="toast" role="status">
-          <span>{toast.msg}</span>
-          {toast.undo && (
-            <button onClick={() => { toast.undo(); setToast(null); }}>되돌리기</button>
-          )}
+          <span className="toast-msg">{toast.msg}</span>
+          <span className="toast-btns">
+            {toast.act && (
+              <button onClick={() => { const f = toast.act.fn; setToast(null); f(); }}>{toast.act.label}</button>
+            )}
+            {toast.undo && (
+              <button onClick={() => { toast.undo(); setToast(null); }}>되돌리기</button>
+            )}
+          </span>
         </div>
       )}
 
       {sheet && sheet.type === 'entry' && (
         <EntrySheet
           habits={habits}
+          phrases={phrases}
           draft={sheet.draft}
           isNew={sheet.isNew}
+          prevEnd={sheet.prevEnd}
           onClose={() => setSheet(null)}
           onSave={saveEntry}
           onCreateHabit={(h) => saveHabit(h, true)}
+          onCreatePhrase={addPhrase}
           onDelete={(id) => {
             const old = entries.find((x) => x.id === id);
             removeEntry(id);
             setSheet(null);
-            if (old) showToast(`${old.name} 기록을 지웠어요`, () => upsertEntry(old));
+            if (old) showToast(`${old.name || '기록'}을(를) 지웠어요`, () => upsertEntry(old));
           }}
         />
       )}
@@ -580,6 +1065,7 @@ function EntryRow({ e, day, armed, onArm, onOpen, onDelete }) {
   const min = entryMin(e);
   const carry = e.start.slice(0, 10) !== day;
   const timeText = e.kind === 'check' ? e.start.slice(11) : `${e.start.slice(11)}–${e.end ? e.end.slice(11) : ''}`;
+  const note = e.note.trim();
 
   return (
     <li className="swipe">
@@ -601,12 +1087,56 @@ function EntryRow({ e, day, armed, onArm, onOpen, onDelete }) {
           {timeText}
         </div>
         <div className="row-main">
-          <div className="row-name">{e.emoji} {e.name}</div>
-          {e.note.trim() && <div className="row-note">{e.note.trim()}</div>}
+          {e.name && <div className="row-name">{e.emoji} {e.name}</div>}
+          {note && <div className={e.name ? 'row-note' : 'row-note solo'}>{note}</div>}
+          {!e.name && !note && <div className="row-note">(내용 없음)</div>}
         </div>
         {min !== null && <div className="row-dur">{fmtDur(min)}</div>}
       </button>
     </li>
+  );
+}
+
+/* ───────────── 아이콘 고르기 ───────────── */
+
+function EmojiPicker({ value, onChange }) {
+  return (
+    <div className="emopicker">
+      <div className="emosel">
+        <span className="emocur">{value || '없음'}</span>
+        <input
+          className="text emoinput"
+          type="text"
+          placeholder="이모지 키보드로 직접 넣기"
+          value=""
+          aria-label="이모지 직접 입력"
+          onChange={(e) => {
+            const g = firstGrapheme(e.target.value);
+            if (g) onChange(g);
+          }}
+        />
+        {value && <button type="button" className="mini" onClick={() => onChange('')}>지우기</button>}
+      </div>
+      <div className="emoscroll">
+        {EMOJI_GROUPS.map(([label, list]) => (
+          <div key={label}>
+            <div className="emolabel">{label}</div>
+            <div className="emogrid">
+              {list.map((em) => (
+                <button
+                  type="button"
+                  key={em}
+                  className={value === em ? 'emo sel' : 'emo'}
+                  onClick={() => onChange(value === em ? '' : em)}
+                >
+                  {em}
+                </button>
+              ))}
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
   );
 }
 
@@ -618,23 +1148,12 @@ function HabitFields({ v, onChange, lockKind }) {
       <input
         className="text"
         type="text"
-        placeholder="항목 이름 (예: 영어 단어)"
+        placeholder="항목 이름 (예: 인스타툰)"
         value={v.name}
         maxLength={20}
         onChange={(e) => onChange({ name: e.target.value })}
       />
-      <div className="emojis">
-        {EMOJIS.map((em) => (
-          <button
-            type="button"
-            key={em}
-            className={v.emoji === em ? 'emo sel' : 'emo'}
-            onClick={() => onChange({ emoji: v.emoji === em ? '' : em })}
-          >
-            {em}
-          </button>
-        ))}
-      </div>
+      <EmojiPicker value={v.emoji} onChange={(emoji) => onChange({ emoji })} />
       <div className="seg">
         <button
           type="button"
@@ -642,7 +1161,7 @@ function HabitFields({ v, onChange, lockKind }) {
           disabled={lockKind}
           onClick={() => onChange({ kind: 'timed' })}
         >
-          ⏱ 시간 기록 (몇 시~몇 시)
+          ⏱ 시간 기록
         </button>
         <button
           type="button"
@@ -666,14 +1185,19 @@ function newHabitFrom(v) {
 
 const DURATIONS = [15, 30, 45, 60, 90, 120];
 
-function EntrySheet({ habits, draft, isNew, onClose, onSave, onDelete, onCreateHabit }) {
+function EntrySheet({ habits, phrases, draft, isNew, prevEnd, onClose, onSave, onDelete, onCreateHabit, onCreatePhrase }) {
   const [f, setF] = useState(draft);
   const [creating, setCreating] = useState(false);
   const [hv, setHv] = useState({ name: '', emoji: '', kind: 'timed' });
+  const [newPhrase, setNewPhrase] = useState(null); // null이면 닫힘, 글자면 입력 중
   const [err, setErr] = useState('');
   const [confirmDel, setConfirmDel] = useState(false);
   const [last, setLast] = useState('end'); // 시작/끝 중 마지막으로 고친 쪽 (길이 버튼의 기준)
-  const [startTouched, setStartTouched] = useState(!isNew); // 새 기록은 시작을 직접 안 고쳤으면 끝 시각을 따라간다
+  const taRef = useRef(null);
+
+  useEffect(() => {
+    if (isNew && taRef.current) taRef.current.focus();
+  }, [isNew]);
 
   const choices =
     draft.ghost && !habits.some((h) => h.id === draft.ghost.id) ? [...habits, draft.ghost] : habits;
@@ -694,29 +1218,10 @@ function EntrySheet({ habits, draft, isNew, onClose, onSave, onDelete, onCreateH
       info = `길이 ${fmtDur(min)}${next ? ` · 다음 날 ${f.end}에 끝` : ''}`;
     }
   } else if (timed && f.start && !f.end) {
-    info = '끝 시각을 비우면 "진행 중"으로 저장돼요';
+    info = habit ? '끝 시각을 비우면 "진행 중"으로 저장돼요' : '끝 시각을 비우면 "그 시각의 메모"로 저장돼요';
   }
 
-  // 지금 화면의 값으로 계산한 "끝나는 날짜" (끝이 시작보다 빠르면 다음 날)
   const endDayOf = (v) => (v.end && v.start && v.end < v.start ? addDays(v.date, 1) : v.date);
-
-  function changeStart(value, dateValue) {
-    setLast('start');
-    setStartTouched(true);
-    set(dateValue ? { start: value, date: dateValue } : { start: value });
-  }
-
-  function changeEnd(value) {
-    setLast('end');
-    if (isNew && !startTouched && value && f.date && f.start) {
-      // 시작을 아직 안 건드렸다면, 끝 시각보다 30분 앞으로 맞춰 둔다
-      const endDT = parseStamp(`${endDayOf(f)}T${value}`);
-      const startDT = new Date(endDT.getTime() - 30 * 60000);
-      set({ end: value, start: timeStr(startDT), date: dayStr(startDT) });
-    } else {
-      set({ end: value });
-    }
-  }
 
   function applyDuration(mins) {
     if (last === 'start' && f.start && f.date) {
@@ -726,8 +1231,26 @@ function EntrySheet({ habits, draft, isNew, onClose, onSave, onDelete, onCreateH
     }
     const endDT = f.end && f.start && f.date ? parseStamp(`${endDayOf(f)}T${f.end}`) : new Date();
     const startDT = new Date(endDT.getTime() - mins * 60000);
-    setStartTouched(true);
     set({ date: dayStr(startDT), start: timeStr(startDT), end: timeStr(endDT) });
+  }
+
+  function insertPhrase(text) {
+    setErr('');
+    setF((prev) => {
+      const cur = prev.note;
+      if (!cur.trim()) return { ...prev, note: text };
+      const sep = /\s$/.test(cur) ? '' : /[.!?]$/.test(cur) ? ' ' : ', ';
+      return { ...prev, note: `${cur}${sep}${text}` };
+    });
+    if (taRef.current) taRef.current.focus();
+  }
+
+  function makePhrase() {
+    const t = String(newPhrase || '').trim();
+    if (!t) return;
+    onCreatePhrase(t);
+    insertPhrase(t);
+    setNewPhrase(null);
   }
 
   function makeHabit() {
@@ -740,20 +1263,21 @@ function EntrySheet({ habits, draft, isNew, onClose, onSave, onDelete, onCreateH
   }
 
   function save() {
-    if (!habit) return setErr('항목을 골라 주세요.');
     if (!f.date || !f.start) return setErr('날짜와 시작 시각을 넣어 주세요.');
+    if (!habit && !f.note.trim()) return setErr('내용을 적거나 항목을 골라 주세요.');
     let end = null;
-    if (habit.kind === 'timed' && f.end) {
+    if (timed && f.end) {
       if (f.end === f.start) return setErr('시작과 끝 시각이 같아요.');
       const endDate = f.end < f.start ? addDays(f.date, 1) : f.date;
       end = `${endDate}T${f.end}`;
     }
+    const kind = habit ? habit.kind : end ? 'timed' : 'check';
     return onSave({
       id: f.id,
-      habitId: habit.id,
-      name: habit.name,
-      emoji: habit.emoji,
-      kind: habit.kind,
+      habitId: habit ? habit.id : '',
+      name: habit ? habit.name : '',
+      emoji: habit ? habit.emoji : '',
+      kind,
       start: `${f.date}T${f.start}`,
       end,
       note: f.note.trim(),
@@ -768,8 +1292,109 @@ function EntrySheet({ habits, draft, isNew, onClose, onSave, onDelete, onCreateH
           <button className="linkbtn" onClick={onClose}>닫기</button>
         </div>
 
-        <div className="label">항목</div>
+        <div className="timegrid">
+          <div>
+            <div className="label">{timed ? '시작' : '시각'}</div>
+            <input
+              className="time"
+              type="time"
+              aria-label="시작 시각"
+              value={f.start}
+              onChange={(e) => { setLast('start'); set({ start: e.target.value }); }}
+            />
+          </div>
+          {timed && (
+            <div>
+              <div className="label">끝</div>
+              <input
+                className="time"
+                type="time"
+                aria-label="끝 시각"
+                value={f.end}
+                onChange={(e) => { setLast('end'); set({ end: e.target.value }); }}
+              />
+            </div>
+          )}
+        </div>
+        <div className="chips tight">
+          {prevEnd && (
+            <button
+              className="chip"
+              onClick={() => { setLast('start'); set({ date: prevEnd.slice(0, 10), start: prevEnd.slice(11) }); }}
+            >
+              직전 기록 끝({hm(prevEnd)})부터
+            </button>
+          )}
+          <button
+            className="chip"
+            onClick={() => { const t = new Date(); setLast('start'); set({ date: dayStr(t), start: timeStr(t) }); }}
+          >
+            시작 지금
+          </button>
+          {timed && (
+            <>
+              <button className="chip" onClick={() => { setLast('end'); set({ end: timeStr(new Date()) }); }}>끝 지금</button>
+              <button className="chip" onClick={() => set({ end: '' })}>끝 비우기</button>
+            </>
+          )}
+        </div>
+        {timed && (
+          <>
+            <div className="label">길이로 입력 (마지막에 고친 시각 기준)</div>
+            <div className="chips">
+              {DURATIONS.map((m) => (
+                <button key={m} className="chip" onClick={() => applyDuration(m)}>{fmtDur(m)}</button>
+              ))}
+            </div>
+          </>
+        )}
+        {info && <div className="info">{info}</div>}
+        <div className="hint">끝이 시작보다 빠르면 다음 날로 계산돼요. (잠: 23:30 → 6:45)</div>
+
+        <div className="label">내용</div>
+        <AutoTextarea
+          className="text area"
+          minRows={4}
+          taRef={taRef}
+          placeholder="무엇을 했는지 자세히 적어요. 줄바꿈도 돼요."
+          value={f.note}
+          onChange={(e) => set({ note: e.target.value })}
+        />
+
+        <div className="label">빠른 문구 (탭하면 내용에 들어가요)</div>
         <div className="chips">
+          {phrases.map((p) => (
+            <button
+              key={p.id}
+              className="chip phrase"
+              onMouseDown={(ev) => ev.preventDefault()}
+              onClick={() => insertPhrase(p.text)}
+            >
+              {p.text}
+            </button>
+          ))}
+          <button className={newPhrase !== null ? 'chip sel' : 'chip dashed'} onClick={() => setNewPhrase(newPhrase === null ? '' : null)}>
+            ＋ 문구
+          </button>
+        </div>
+        {newPhrase !== null && (
+          <div className="timerow phrase-new">
+            <input
+              className="text"
+              type="text"
+              placeholder="자주 쓰는 말 (예: 아내랑 산책)"
+              value={newPhrase}
+              maxLength={60}
+              onChange={(e) => setNewPhrase(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && makePhrase()}
+            />
+            <button className="mini" disabled={!newPhrase.trim()} onClick={makePhrase}>추가</button>
+          </div>
+        )}
+
+        <div className="label">항목 (선택 · 통계에 들어가요)</div>
+        <div className="chips">
+          <button className={!f.habitId ? 'chip sel' : 'chip'} onClick={() => set({ habitId: '' })}>없음</button>
           {choices.map((h) => (
             <button
               key={h.id}
@@ -791,41 +1416,7 @@ function EntrySheet({ habits, draft, isNew, onClose, onSave, onDelete, onCreateH
         )}
 
         <div className="label">날짜</div>
-        <input className="time" type="date" value={f.date} onChange={(e) => set({ date: e.target.value })} />
-
-        <div className="label">{timed ? '시작' : '시각'}</div>
-        <div className="timerow">
-          <input className="time" type="time" value={f.start} onChange={(e) => changeStart(e.target.value)} />
-          <button className="mini" onClick={() => { const t = new Date(); changeStart(timeStr(t), dayStr(t)); }}>지금</button>
-        </div>
-
-        {timed && (
-          <>
-            <div className="label">끝</div>
-            <div className="timerow">
-              <input className="time" type="time" value={f.end} onChange={(e) => changeEnd(e.target.value)} />
-              <button className="mini" onClick={() => changeEnd(timeStr(new Date()))}>지금</button>
-              <button className="mini" onClick={() => set({ end: '' })}>비우기</button>
-            </div>
-            <div className="label">길이로 빠르게 입력 (마지막에 고친 시각 기준)</div>
-            <div className="chips">
-              {DURATIONS.map((m) => (
-                <button key={m} className="chip" onClick={() => applyDuration(m)}>{fmtDur(m)}</button>
-              ))}
-            </div>
-            {info && <div className="info">{info}</div>}
-            <div className="hint">끝이 시작보다 빠르면 다음 날로 계산돼요. (잠: 23:30 → 06:45)</div>
-          </>
-        )}
-
-        <div className="label">메모 (선택)</div>
-        <input
-          className="text"
-          type="text"
-          placeholder="예: OSPF 챕터"
-          value={f.note}
-          onChange={(e) => set({ note: e.target.value })}
-        />
+        <input className="time" type="date" aria-label="날짜" value={f.date} onChange={(e) => set({ date: e.target.value })} />
 
         {err && <div className="err">{err}</div>}
         <button className="primary wide" onClick={save}>저장</button>
@@ -890,6 +1481,7 @@ function Stats({ entries, habits, today }) {
     const map = new Map();
     habits.forEach((h) => map.set(h.id, { key: h.id, name: h.name, emoji: h.emoji, kind: h.kind, count: 0, min: 0, per: {} }));
     entries.forEach((e) => {
+      if (!e.habitId) return; // 항목 없이 적은 기록은 통계에 넣지 않음
       const d = e.start.slice(0, 10);
       if (d < from || d > today) return;
       if (e.kind === 'timed' && !e.end) return;
@@ -943,19 +1535,28 @@ function Stats({ entries, habits, today }) {
           </div>
         );
       })}
-      <p className="hint pad">진행 중인 기록은 끝낸 뒤부터 합계에 들어가요. 자정을 넘긴 기록(잠)은 시작한 날에 넣어요.</p>
+      <p className="hint pad">항목을 고른 기록만 통계에 들어가요. 진행 중인 기록은 끝낸 뒤부터 합계에 들어가고, 자정을 넘긴 기록(잠)은 시작한 날에 넣어요.</p>
     </>
   );
 }
 
-/* ───────────── 설정 / 백업 ───────────── */
+/* ───────────── 설정 / 동기화 / 백업 ───────────── */
 
-function Settings({ data, setData, onEditHabit, onMove, showToast }) {
+function Settings({
+  data, setData, syncStatus, onConnect, onDisconnect, onSyncNow, onResync,
+  onEditHabit, onMove, onAddPhrase, onDeletePhrase, showToast,
+}) {
   const fileRef = useRef(null);
-  const { habits, entries } = data;
+  const [keyInput, setKeyInput] = useState('');
+  const [phraseInput, setPhraseInput] = useState('');
+  const { habits, phrases, entries } = data;
+  const connected = !!data.sync.key;
 
   async function exportAll() {
-    const payload = { app: 'daily-log', version: 1, exportedAt: new Date().toISOString(), habits, entries };
+    const payload = {
+      app: 'daily-log', version: 2, exportedAt: new Date().toISOString(),
+      habits, phrases, entries, days: data.days,
+    };
     const text = JSON.stringify(payload, null, 2);
     const name = `daily-log-${dayStr(new Date())}.json`;
     const file = new File([text], name, { type: 'application/json' });
@@ -988,18 +1589,30 @@ function Settings({ data, setData, onEditHabit, onMove, showToast }) {
       try {
         const parsed = JSON.parse(reader.result);
         const inHabits = (Array.isArray(parsed.habits) ? parsed.habits : []).map(normalizeHabit).filter(Boolean);
+        const inPhrases = (Array.isArray(parsed.phrases) ? parsed.phrases : []).map(normalizePhrase).filter(Boolean);
         const inEntries = (Array.isArray(parsed.entries) ? parsed.entries : []).map(normalizeEntry).filter(Boolean);
-        if (!inHabits.length && !inEntries.length) throw new Error('empty');
+        const inDays = Object.entries(parsed.days && typeof parsed.days === 'object' ? parsed.days : {})
+          .map(([k, v]) => [k, normalizeDay(k, v)])
+          .filter(([, v]) => v);
+        if (!inHabits.length && !inEntries.length && !inPhrases.length && !inDays.length) throw new Error('empty');
+        const addedE = inEntries.filter((e) => !entries.some((x) => x.id === e.id) && !data.gone[`e:${e.id}`]).length;
         setData((d) => {
-          const haveH = new Set(d.habits.map((h) => h.id));
-          const haveE = new Set(d.entries.map((e) => e.id));
+          const fresh = (list, kind) => {
+            const have = new Set(list.map((x) => x.id));
+            return (items) => items.filter((x) => !have.has(x.id) && !d.gone[`${kind}:${x.id}`]).map((x) => ({ ...x, u: stampU() }));
+          };
+          const days = { ...d.days };
+          inDays.forEach(([k, v]) => {
+            if (!days[k] || !days[k].text.trim()) days[k] = { ...v, u: stampU() };
+          });
           return {
             ...d,
-            habits: [...d.habits, ...inHabits.filter((h) => !haveH.has(h.id))],
-            entries: [...d.entries, ...inEntries.filter((e) => !haveE.has(e.id))],
+            habits: [...d.habits, ...fresh(d.habits, 'h')(inHabits)].sort(byO),
+            phrases: [...d.phrases, ...fresh(d.phrases, 'p')(inPhrases)].sort(byO),
+            entries: [...d.entries, ...fresh(d.entries, 'e')(inEntries)],
+            days,
           };
         });
-        const addedE = inEntries.filter((e) => !entries.some((x) => x.id === e.id)).length;
         showToast(`기록 ${addedE}개를 가져왔어요`);
       } catch {
         showToast('파일을 읽지 못했어요');
@@ -1009,6 +1622,8 @@ function Settings({ data, setData, onEditHabit, onMove, showToast }) {
   }
 
   const last = data.lastBackup ? new Date(data.lastBackup) : null;
+  const lastSync = data.sync.last ? new Date(data.sync.last) : null;
+  const phase = connected ? syncStatus.phase : 'off';
 
   return (
     <>
@@ -1020,6 +1635,41 @@ function Settings({ data, setData, onEditHabit, onMove, showToast }) {
           <button className="linkbtn" onClick={() => setData((d) => ({ ...d, notice: null }))}>확인</button>
         </div>
       )}
+
+      <h2 className="sec">기기 동기화 (폰 ↔ 아이패드)</h2>
+      <div className="card">
+        {connected ? (
+          <>
+            <div className={phase === 'ok' || phase === 'syncing' ? 'syncline ok' : 'syncline warn'}>
+              {SYNC_TEXT[phase] || SYNC_TEXT.error}
+              {phase === 'ok' && lastSync ? ` · ${timeStr(lastSync)}` : ''}
+            </div>
+            <p className="hint">고친 내용은 자동으로 올라가고, 앱을 열 때 다른 기기의 기록을 받아와요.</p>
+            <div className="btnrow">
+              <button className="primary" onClick={onSyncNow}>지금 동기화</button>
+              <button className="ghost" onClick={onDisconnect}>연결 끊기</button>
+            </div>
+            <button className="linkbtn" onClick={onResync}>처음부터 다시 맞추기</button>
+          </>
+        ) : (
+          <>
+            <p className="hint nomargin">
+              두 기기에 같은 동기화 암호를 넣으면 기록이 서로 맞춰져요. 암호는 Vercel에 넣어 둔 SYNC_KEY와 같아야 해요.
+            </p>
+            <input
+              className="text"
+              type="password"
+              autoComplete="off"
+              autoCapitalize="off"
+              placeholder="동기화 암호"
+              value={keyInput}
+              onChange={(e) => setKeyInput(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && onConnect(keyInput)}
+            />
+            <button className="primary wide" disabled={!keyInput.trim()} onClick={() => onConnect(keyInput)}>연결하기</button>
+          </>
+        )}
+      </div>
 
       <h2 className="sec">내 항목</h2>
       <ul className="list">
@@ -1036,10 +1686,44 @@ function Settings({ data, setData, onEditHabit, onMove, showToast }) {
       </ul>
       <button className="primary wide" onClick={() => onEditHabit(null)}>＋ 항목 추가</button>
 
+      <h2 className="sec">빠른 문구</h2>
+      <div className="card">
+        <p className="hint nomargin">기록을 적을 때 탭 한 번으로 내용에 들어가는 말이에요.</p>
+        <div className="chips phrasebox">
+          {phrases.map((p) => (
+            <span className="chip phrase del" key={p.id}>
+              {p.text}
+              <button aria-label={`${p.text} 지우기`} onClick={() => onDeletePhrase(p.id)}>✕</button>
+            </span>
+          ))}
+          {phrases.length === 0 && <span className="hint nomargin">아직 없어요.</span>}
+        </div>
+        <div className="timerow phrase-new">
+          <input
+            className="text"
+            type="text"
+            placeholder="새 문구 (예: 아내랑 산책)"
+            value={phraseInput}
+            maxLength={60}
+            onChange={(e) => setPhraseInput(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && onAddPhrase(phraseInput)) setPhraseInput('');
+            }}
+          />
+          <button
+            className="mini"
+            disabled={!phraseInput.trim()}
+            onClick={() => { if (onAddPhrase(phraseInput)) setPhraseInput(''); }}
+          >
+            추가
+          </button>
+        </div>
+      </div>
+
       <h2 className="sec">백업</h2>
       <div className="card">
         <p className="hint nomargin">
-          기록은 이 기기 안에만 저장돼요. 가끔 백업 파일을 만들어 두세요.
+          동기화를 켜도 가끔 백업 파일을 만들어 두면 안심이에요.
           {last ? ` 마지막 백업: ${dayLabel(dayStr(last))} ${timeStr(last)}` : ' 아직 백업한 적이 없어요.'}
         </p>
         <div className="btnrow">
