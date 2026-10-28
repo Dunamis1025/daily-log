@@ -1,11 +1,25 @@
 <!DOCTYPE html>
-<html lang="ko">
+<html lang="ko" data-theme="wood">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-    <meta name="theme-color" content="#f6f7fb" media="(prefers-color-scheme: light)" />
-    <meta name="theme-color" content="#14161c" media="(prefers-color-scheme: dark)" />
-    <meta name="color-scheme" content="light dark" />
+    <meta id="themecolor" name="theme-color" content="#f5efe4" />
+    <script>
+      (function () {
+        try {
+          var p = JSON.parse(localStorage.getItem('dailylog:prefs') || '{}');
+          var th = ['wood', 'pink', 'dark'].indexOf(p.theme) >= 0 ? p.theme : 'wood';
+          var el = document.documentElement;
+          el.setAttribute('data-theme', th);
+          if (p.lang === 'en') el.setAttribute('lang', 'en');
+          var c = { wood: '#f5efe4', pink: '#fff3f7', dark: '#0e0f12' }[th];
+          document.getElementById('themecolor').setAttribute('content', c);
+        } catch (e) {}
+      })();
+    </script>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Serif+KR:wght@600;700&display=swap" rel="stylesheet" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="default" />

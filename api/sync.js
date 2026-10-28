@@ -17,7 +17,7 @@ const HASH = 'dailylog:rec'; // key -> {v,u,s}
 const IDX = 'dailylog:idx'; // 번호(s) 순서 목록
 const SEQ = 'dailylog:seq'; // 번호표
 
-const KEY_RE = /^[hped]:[A-Za-z0-9_.:-]{1,80}$/;
+const KEY_RE = /^[hpedg]:[A-Za-z0-9_.:-]{1,80}$/;
 const MAX_CHANGES = 500;
 const MAX_VALUE_BYTES = 12000;
 const PAGE = 400;

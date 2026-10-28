@@ -1,30 +1,28 @@
-:root {
-  --bg: #f6f7fb;
-  --card: #ffffff;
-  --ink: #1d2230;
-  --muted: #7a8194;
-  --line: #e3e6ef;
-  --accent: #3b6ef5;
-  --accent-ink: #ffffff;
-  --accent-soft: #e6edff;
-  --danger: #c2483b;
-  --run: #fff4dc;
-  --run-line: #f0cf86;
+/* 디자인 3종: 우드 노트(기본) / 핑크 / 시크 다크. 고르면 <html data-theme="..."> 로 바뀜 */
+:root, :root[data-theme='wood'] {
+  color-scheme: light;
+  --bg: #f5efe4; --card: #fffaf0; --ink: #3b2a1d; --muted: #8a7560; --line: #e2d3bb;
+  --accent: #7a4b2a; --accent-ink: #fffaf0; --accent-soft: #efe0cb; --danger: #b3472f;
+  --run: #fbefd0; --run-line: #e3c27a;
+  --toast-bg: #3b2a1d; --toast-ink: #fffaf0; --toast-accent: #f0c98a;
+  --font-head: 'Noto Serif KR', 'Apple SD Gothic Neo', Georgia, serif;
+  --rule: repeating-linear-gradient(to bottom, transparent 0, transparent 25px, #e8dcc6 25px, #e8dcc6 26px);
 }
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #14161c;
-    --card: #1f222b;
-    --ink: #eceef5;
-    --muted: #9298ab;
-    --line: #313644;
-    --accent: #7a9dff;
-    --accent-ink: #0f1730;
-    --accent-soft: #263253;
-    --danger: #ee8274;
-    --run: #3a3220;
-    --run-line: #6d5a2a;
-  }
+:root[data-theme='pink'] {
+  color-scheme: light;
+  --bg: #fff3f7; --card: #ffffff; --ink: #4d2c3a; --muted: #a07888; --line: #f6d4e0;
+  --accent: #ec5b93; --accent-ink: #ffffff; --accent-soft: #ffe1ec; --danger: #d6455d;
+  --run: #fff0d6; --run-line: #f4c987;
+  --toast-bg: #4d2c3a; --toast-ink: #fff3f7; --toast-accent: #ffb3d1;
+  --font-head: inherit; --rule: none;
+}
+:root[data-theme='dark'] {
+  color-scheme: dark;
+  --bg: #0e0f12; --card: #17181d; --ink: #ebe8e1; --muted: #8d8b84; --line: #2a2c33;
+  --accent: #d2b277; --accent-ink: #1a1408; --accent-soft: #2a2519; --danger: #e5806f;
+  --run: #2a2417; --run-line: #6d5a2a;
+  --toast-bg: #ebe8e1; --toast-ink: #0e0f12; --toast-accent: #7a5a1c;
+  --font-head: inherit; --rule: none;
 }
 
 * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
@@ -46,7 +44,8 @@ button:disabled { opacity: 0.4; cursor: default; }
 }
 
 .topbar { display: flex; align-items: center; justify-content: space-between; min-height: 48px; }
-.topbar h1 { margin: 0; font-size: 26px; font-weight: 700; }
+.topbar h1 { margin: 0; font-size: 26px; font-weight: 700; font-family: var(--font-head); }
+:root[data-theme='pink'] .topbar h1::after { content: ' ♡'; color: var(--accent); }
 .sec { margin: 22px 0 8px; font-size: 15px; color: var(--muted); font-weight: 600; }
 .sec.nomargin { margin: 0; }
 .empty { color: var(--muted); font-size: 15px; margin: 4px 0 0; }
@@ -157,10 +156,10 @@ button:disabled { opacity: 0.4; cursor: default; }
 .toast {
   position: fixed; left: 16px; right: 16px; bottom: calc(env(safe-area-inset-bottom) + 76px); z-index: 30;
   max-width: 608px; margin: 0 auto; display: flex; align-items: center; justify-content: space-between; gap: 12px;
-  background: var(--ink); color: var(--bg); border-radius: 14px; padding: 10px 14px; font-size: 15px;
+  background: var(--toast-bg); color: var(--toast-ink); border-radius: 14px; padding: 10px 14px; font-size: 15px;
   box-shadow: 0 6px 24px rgba(0, 0, 0, 0.25);
 }
-.toast button { background: none; border: 0; color: var(--accent); font-weight: 700; font-size: 15px; min-height: 40px; padding: 0 4px; white-space: nowrap; }
+.toast button { background: none; border: 0; color: var(--toast-accent); font-weight: 700; font-size: 15px; min-height: 40px; padding: 0 4px; white-space: nowrap; }
 .notice { background: var(--run); border: 1px solid var(--run-line); border-radius: 14px; padding: 12px 14px; margin: 8px 0; font-size: 14px; display: flex; gap: 8px; align-items: center; justify-content: space-between; }
 
 /* 시트 */
@@ -254,3 +253,41 @@ button:disabled { opacity: 0.4; cursor: default; }
 .syncline.warn { color: var(--danger); }
 .toast-msg { flex: 1; min-width: 0; }
 .toast-btns { display: flex; gap: 6px; }
+
+/* ───── 그룹 / 편집 모드 / 언어 / 디자인 선택 ───── */
+.topright { display: flex; align-items: center; gap: 8px; }
+.editbtn { border: 1px solid var(--line); background: var(--card); border-radius: 999px; min-height: 40px; padding: 0 16px; font-weight: 600; font-size: 14px; }
+.editbtn.on { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+.group .sec, .grouphead .sec { margin: 14px 0 8px; font-family: var(--font-head); }
+.grouphead { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.gtools { display: flex; gap: 6px; margin-top: 6px; }
+.gtools .mini { min-width: 44px; min-height: 40px; padding: 0 8px; }
+.ghost.wide { width: 100%; margin: 0 0 12px; }
+.qwrap { position: relative; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+.qwrap .qbtn { width: 100%; flex: 1; }
+.qx {
+  position: absolute; top: -6px; right: -6px; width: 30px; height: 30px; border-radius: 50%; border: 0;
+  background: var(--danger); color: #fff; font-size: 14px; font-weight: 700; line-height: 1; z-index: 1;
+}
+.qmv { display: flex; justify-content: center; gap: 6px; }
+.qmv button { flex: 1; height: 34px; border-radius: 8px; border: 1px solid var(--line); background: var(--bg); font-size: 12px; padding: 0; }
+.langseg { margin-top: 0; }
+.themes { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.themecard {
+  display: flex; flex-direction: column; align-items: flex-start; gap: 4px; text-align: left; padding: 10px;
+  border-radius: 16px; border: 2px solid var(--line); background: var(--card);
+}
+.themecard.on { border-color: var(--accent); }
+.swatch { display: flex; width: 100%; height: 26px; border-radius: 8px; overflow: hidden; border: 1px solid var(--line); }
+.swatch span { flex: 1; }
+.tname { font-weight: 700; font-size: 14px; }
+.tdesc { font-size: 11px; color: var(--muted); line-height: 1.3; }
+.tight0 { margin-top: 4px; }
+
+/* 우드 노트: 내용칸에 노트처럼 줄 */
+:root[data-theme='wood'] .area {
+  background-image: var(--rule); background-attachment: local; background-position: 0 11px; line-height: 26px;
+}
+:root[data-theme='wood'] .card, :root[data-theme='wood'] .qbtn, :root[data-theme='wood'] .row {
+  box-shadow: 0 1px 0 rgba(122, 75, 42, 0.08);
+}
