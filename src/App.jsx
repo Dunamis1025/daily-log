@@ -144,6 +144,8 @@ const DEFAULT_PHRASES = [
   '식세기 돌림',
 ].map((text, i) => ({ id: `p-${i + 1}`, text, o: (i + 1) * 10, u: 1 }));
 
+const SLOT_TIME = { all: '12:00', dawn: '04:00', am: '09:00', pm: '14:00', eve: '19:00', night: '22:00' };
+const SLOTS = Object.keys(SLOT_TIME);
 const byO = (a, b) => a.o - b.o;
 const num = (x, fallback) => (Number.isFinite(x) ? x : fallback);
 
@@ -179,8 +181,10 @@ function normalizePhrase(p, idx = 0) {
 function normalizeEntry(e) {
   if (!e || typeof e !== 'object' || typeof e.start !== 'string' || !STAMP_RE.test(e.start)) return null;
   const start = e.start.slice(0, 16);
-  const habitId = e.habitId ? String(e.habitId) : '';
-  let kind = e.kind === 'check' ? 'check' : 'timed';
+  const approx = !!e.approx; // "대략 적기": 시각을 모를 때. 길이 계산·통계에 넣지 않음
+  const slot = SLOTS.includes(e.slot) ? e.slot : 'all';
+  const habitId = e.habitId && !approx ? String(e.habitId) : '';
+  let kind = e.kind === 'check' || approx ? 'check' : 'timed';
   let end = kind === 'timed' && typeof e.end === 'string' && STAMP_RE.test(e.end) ? e.end.slice(0, 16) : null;
   let name = String(e.name || '').trim().slice(0, 20);
   if (!name && habitId) name = '이름 없음';
@@ -200,6 +204,8 @@ function normalizeEntry(e) {
     start,
     end,
     note: String(e.note || '').slice(0, 4000),
+    approx,
+    slot,
     u,
   };
 }
@@ -396,7 +402,7 @@ async function postSync(key, body) {
 
 /* ───────────── 메모장용 글 만들기 ───────────── */
 
-function buildSummary(day, list, diary, lang, t, nm) {
+function buildSummary(day, list, diary, lang, t, nm, approxList) {
   const lines = [memoDay(day, lang)];
   const totals = new Map();
   const sorted = [...list].sort((a, b) => (a.start < b.start ? -1 : 1));
@@ -421,6 +427,11 @@ function buildSummary(day, list, diary, lang, t, nm) {
     const body = [head, note].filter(Boolean).join(' ');
     lines.push(`${carry}${time}${body ? ` ${body}` : ''}`);
   });
+  const rough = (approxList || []).filter((e) => e.note.trim());
+  if (rough.length) {
+    lines.push('');
+    rough.forEach((e) => lines.push(`${e.slot !== 'all' ? `(${t(`slot_${e.slot}`)}) ` : ''}${e.note.trim()}`));
+  }
   const sums = [...totals.entries()].filter(([, m]) => m > 0).map(([n, m]) => `${n} ${fmtDur(m, lang)}`);
   if (sums.length) lines.push('', `${t('sumTotal')}: ${sums.join(' / ')}`);
   if (diary && diary.trim()) lines.push('', diary.trim());
@@ -774,6 +785,7 @@ export default function App() {
     () =>
       entries
         .filter((e) => {
+          if (e.approx) return false; // 대략 적은 기록은 "하루 요약"에 따로
           if (e.kind === 'timed' && !e.end) return false; // 진행 중인 것은 위쪽 카드에 따로 보여 준다
           const sd = e.start.slice(0, 10);
           return sd === day || (e.end && e.end.slice(0, 10) === day);
@@ -782,6 +794,10 @@ export default function App() {
     [entries, day]
   );
 
+  const approxEntries = useMemo(
+    () => entries.filter((e) => e.approx && e.start.slice(0, 10) === day).sort((a, b) => (a.start < b.start ? -1 : 1)),
+    [entries, day]
+  );
   const diaryText = (data.days[day] || {}).text || '';
 
   const summary = useMemo(
@@ -792,9 +808,10 @@ export default function App() {
         diaryText,
         lang,
         t,
-        nm
+        nm,
+        approxEntries
       ),
-    [day, dayEntries, running, diaryText, lang, t, nm]
+    [day, dayEntries, running, diaryText, lang, t, nm, approxEntries]
   );
 
   const dayTotals = useMemo(() => {
@@ -812,7 +829,7 @@ export default function App() {
   function lastEndOf(dayS, limitStamp) {
     let best = null;
     entries.forEach((e) => {
-      if (e.kind === 'timed' && !e.end) return;
+      if (e.approx || (e.kind === 'timed' && !e.end)) return;
       const stamp = e.end || e.start;
       if (e.start.slice(0, 10) !== dayS && stamp.slice(0, 10) !== dayS) return;
       if (limitStamp && stamp > limitStamp) return;
@@ -836,6 +853,8 @@ export default function App() {
         start: e.start.slice(11),
         end: e.end ? e.end.slice(11) : '',
         note: e.note,
+        approx: !!e.approx,
+        slot: e.slot || 'all',
         ghost: e.habitId ? { id: e.habitId, name: e.name, emoji: e.emoji, kind: e.kind } : null,
       },
     });
@@ -911,7 +930,7 @@ export default function App() {
       prevEnd: prev,
       draft: {
         id: uid(), habitId: '', date: startStamp.slice(0, 10), start: startStamp.slice(11),
-        end: endTime, note: '', ghost: null,
+        end: endTime, note: '', approx: false, slot: 'all', ghost: null,
       },
     });
   }
@@ -948,6 +967,14 @@ export default function App() {
     setSyncStatus({ phase: 'off', at: null });
   }
 
+  const onRowDelete = (id) => {
+    const old = entries.find((x) => x.id === id);
+    removeEntry(id);
+    setArmedId(null);
+    if (old) {
+      showToast(t('deletedMsg', { name: old.name ? nm(old.habitId, old.name) : t('entryWord') }), () => upsertEntry(old));
+    }
+  };
   const isRunning = (h) => running.some((e) => e.habitId === h.id);
   const dayTag = day === today ? t('today') : day === addDays(today, -1) ? t('yesterday') : '';
   const chip = (() => {
@@ -1087,20 +1114,29 @@ export default function App() {
                     armed={armedId === e.id}
                     onArm={setArmedId}
                     onOpen={openEdit}
-                    onDelete={(id) => {
-                      const old = entries.find((x) => x.id === id);
-                      removeEntry(id);
-                      setArmedId(null);
-                      if (old) {
-                        showToast(
-                          t('deletedMsg', { name: old.name ? nm(old.habitId, old.name) : t('entryWord') }),
-                          () => upsertEntry(old)
-                        );
-                      }
-                    }}
+                    onDelete={onRowDelete}
                   />
                 ))}
               </ul>
+            )}
+
+            {approxEntries.length > 0 && (
+              <>
+                <h2 className="sec">{t('approxTitle')}</h2>
+                <ul className="list">
+                  {approxEntries.map((e) => (
+                    <EntryRow
+                      key={e.id}
+                      e={e}
+                      day={day}
+                      armed={armedId === e.id}
+                      onArm={setArmedId}
+                      onOpen={openEdit}
+                      onDelete={onRowDelete}
+                    />
+                  ))}
+                </ul>
+              </>
             )}
 
             <div className="card diary">
@@ -1278,8 +1314,8 @@ function EntryRow({ e, day, armed, onArm, onOpen, onDelete }) {
   }
 
   const min = entryMin(e);
-  const carry = e.start.slice(0, 10) !== day;
-  const timeText = e.kind === 'check' ? e.start.slice(11) : `${e.start.slice(11)}–${e.end ? e.end.slice(11) : ''}`;
+  const carry = !e.approx && e.start.slice(0, 10) !== day;
+  const timeText = e.approx ? t(`slot_${e.slot}`) : e.kind === 'check' ? e.start.slice(11) : `${e.start.slice(11)}–${e.end ? e.end.slice(11) : ''}`;
   const note = e.note.trim();
 
   return (
@@ -1498,6 +1534,14 @@ function EntrySheet({ habits, phrases, defaultGroup, draft, isNew, prevEnd, onCl
   }
 
   function save() {
+    if (f.approx) {
+      if (!f.date) return setErr(t('errTime'));
+      if (!f.note.trim()) return setErr(t('errNeed'));
+      return onSave({
+        id: f.id, habitId: '', name: '', emoji: '', kind: 'check',
+        start: `${f.date}T${SLOT_TIME[f.slot] || '12:00'}`, end: null, note: f.note.trim(), approx: true, slot: f.slot || 'all',
+      });
+    }
     if (!f.date || !f.start) return setErr(t('errTime'));
     if (!habit && !f.note.trim()) return setErr(t('errNeed'));
     let end = null;
@@ -1516,6 +1560,8 @@ function EntrySheet({ habits, phrases, defaultGroup, draft, isNew, prevEnd, onCl
       start: `${f.date}T${f.start}`,
       end,
       note: f.note.trim(),
+      approx: false,
+      slot: 'all',
     });
   }
 
@@ -1527,6 +1573,24 @@ function EntrySheet({ habits, phrases, defaultGroup, draft, isNew, prevEnd, onCl
           <button className="linkbtn" onClick={onClose}>{t('close')}</button>
         </div>
 
+        <div className="seg modeseg">
+          <button className={!f.approx ? 'on' : ''} onClick={() => set({ approx: false })}>{t('modeExact')}</button>
+          <button className={f.approx ? 'on' : ''} onClick={() => set({ approx: true, habitId: '' })}>{t('modeApprox')}</button>
+        </div>
+        {f.approx && (
+          <>
+            <div className="label">{t('slotLbl')}</div>
+            <div className="chips">
+              {SLOTS.map((k) => (
+                <button key={k} className={f.slot === k ? 'chip sel' : 'chip'} onClick={() => set({ slot: k })}>{t(`slot_${k}`)}</button>
+              ))}
+            </div>
+            <div className="hint">{t('approxHint')}</div>
+          </>
+        )}
+
+        {!f.approx && (
+        <>
         <div className="timegrid">
           <div>
             <div className="label">{timed ? t('start') : t('at')}</div>
@@ -1586,6 +1650,9 @@ function EntrySheet({ habits, phrases, defaultGroup, draft, isNew, prevEnd, onCl
         {info && <div className="info">{info}</div>}
         <div className="hint">{t('nextDayHint')}</div>
 
+        </>
+        )}
+
         <div className="label">{t('content')}</div>
         <AutoTextarea
           className="text area"
@@ -1627,6 +1694,8 @@ function EntrySheet({ habits, phrases, defaultGroup, draft, isNew, prevEnd, onCl
           </div>
         )}
 
+        {!f.approx && (
+        <>
         <div className="label">{t('itemOptional')}</div>
         <div className="chips">
           <button className={!f.habitId ? 'chip sel' : 'chip'} onClick={() => set({ habitId: '' })}>{t('none')}</button>
@@ -1648,6 +1717,9 @@ function EntrySheet({ habits, phrases, defaultGroup, draft, isNew, prevEnd, onCl
             <HabitFields v={hv} onChange={(p) => setHv({ ...hv, ...p })} />
             <button className="primary wide" disabled={!hv.name.trim()} onClick={makeHabit}>{t('makeItem')}</button>
           </div>
+        )}
+
+        </>
         )}
 
         <div className="label">{t('dateLbl')}</div>

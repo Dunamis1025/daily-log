@@ -82,6 +82,17 @@ const D = {
   groupLbl: ['그룹', 'Group'],
 
   // 기록 시트
+  modeExact: ['시각 정확히', 'Exact times'],
+  modeApprox: ['대략 · 시간 모름', 'Rough · no times'],
+  slotLbl: ['언제쯤?', 'Roughly when?'],
+  slot_all: ['하루종일', 'All day'],
+  slot_dawn: ['새벽', 'Dawn'],
+  slot_am: ['오전', 'Morning'],
+  slot_pm: ['오후', 'Afternoon'],
+  slot_eve: ['저녁', 'Evening'],
+  slot_night: ['밤', 'Night'],
+  approxHint: ['길이는 계산하지 않고 통계에도 안 들어가요. 정확히 기억나는 것(수면 등)은 "시각 정확히"로 따로 적어요.', 'No length is counted and it stays out of stats. Log things you remember exactly (like sleep) separately with exact times.'],
+  approxTitle: ['하루 요약', 'Day summary'],
   addTitle: ['기록 추가', 'Add entry'],
   editTitle: ['기록 수정', 'Edit entry'],
   start: ['시작', 'Start'],

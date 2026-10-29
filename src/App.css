@@ -291,3 +291,6 @@ button:disabled { opacity: 0.4; cursor: default; }
 :root[data-theme='wood'] .card, :root[data-theme='wood'] .qbtn, :root[data-theme='wood'] .row {
   box-shadow: 0 1px 0 rgba(122, 75, 42, 0.08);
 }
+
+/* 대략 적기 */
+.modeseg { margin: 12px 0 0; }
