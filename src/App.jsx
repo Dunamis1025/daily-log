@@ -502,6 +502,27 @@ export default function App() {
   const [toast, setToast] = useState(null); // { msg, undo, act }
   const [armedId, setArmedId] = useState(null);
   const [editing, setEditing] = useState(false);
+  // 아이폰 홈 화면처럼: 항목을 길게 누르면 편집 모드(흔들리며 ✕)가 켜진다
+  const pressed = useRef({ timer: null, x: 0, y: 0, fired: false });
+  const pressEnd = () => {
+    clearTimeout(pressed.current.timer);
+    pressed.current.timer = null;
+  };
+  const pressStart = (ev) => {
+    pressed.current.fired = false;
+    pressed.current.x = ev.clientX;
+    pressed.current.y = ev.clientY;
+    clearTimeout(pressed.current.timer);
+    pressed.current.timer = setTimeout(() => {
+      pressed.current.timer = null;
+      pressed.current.fired = true;
+      if (navigator.vibrate) navigator.vibrate(15);
+      setEditing(true);
+    }, 550);
+  };
+  const pressMove = (ev) => {
+    if (pressed.current.timer && Math.hypot(ev.clientX - pressed.current.x, ev.clientY - pressed.current.y) > 10) pressEnd();
+  };
   const [syncStatus, setSyncStatus] = useState(() => ({ phase: data.sync.key ? 'idle' : 'off', at: null }));
 
   const lang = prefs.lang;
@@ -1059,10 +1080,23 @@ export default function App() {
                     {list.map((h, hi) => {
                       const label = nm(h.id, h.name);
                       return (
-                        <div className="qwrap" key={h.id}>
+                        <div className={editing ? 'qwrap jig' : 'qwrap'} key={h.id}>
                           <button
                             className={isRunning(h) ? 'qbtn on' : 'qbtn'}
-                            onClick={() => (editing ? setSheet({ type: 'habit', habit: h }) : quick(h))}
+                            onClick={() => {
+                              if (pressed.current.fired) {
+                                pressed.current.fired = false; // 길게 눌러 편집이 시작된 직후의 손 뗌은 탭이 아님
+                                return;
+                              }
+                              if (editing) setSheet({ type: 'habit', habit: h });
+                              else quick(h);
+                            }}
+                            onPointerDown={(ev) => pressStart(ev)}
+                            onPointerMove={(ev) => pressMove(ev)}
+                            onPointerUp={pressEnd}
+                            onPointerCancel={pressEnd}
+                            onPointerLeave={pressEnd}
+                            onContextMenu={(ev) => ev.preventDefault()}
                           >
                             <span className="qe">{h.emoji || '•'}</span>
                             <span className="qn">{label}</span>

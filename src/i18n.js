@@ -78,7 +78,7 @@ const D = {
   moveLeft: ['{name} 앞으로', 'Move {name} earlier'],
   moveRight: ['{name} 뒤로', 'Move {name} later'],
   removeItem: ['{name} 삭제', 'Delete {name}'],
-  editHint: ['항목을 탭하면 고치고, ✕로 지우고, ◀ ▶로 순서를 바꿔요.', 'Tap an item to edit it, ✕ to delete, ◀ ▶ to reorder.'],
+  editHint: ['항목을 탭하면 고치고, ✕로 지우고, ◀ ▶로 순서를 바꿔요. 다 하면 "완료".', 'Tap an item to edit it, ✕ to delete, ◀ ▶ to reorder. Tap "Done" when finished.'],
   groupLbl: ['그룹', 'Group'],
 
   // 기록 시트

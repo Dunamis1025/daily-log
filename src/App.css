@@ -294,3 +294,10 @@ button:disabled { opacity: 0.4; cursor: default; }
 
 /* 대략 적기 */
 .modeseg { margin: 12px 0 0; }
+
+/* 편집 모드: 아이폰 홈 화면처럼 살짝 흔들림 (움직임 줄이기 설정이면 멈춤) */
+@keyframes jiggle { 0% { transform: rotate(-1.1deg); } 50% { transform: rotate(1.1deg); } 100% { transform: rotate(-1.1deg); } }
+.qwrap.jig .qbtn:not(.add) { animation: jiggle 0.28s ease-in-out infinite; }
+.qwrap.jig:nth-child(even) .qbtn:not(.add) { animation-delay: -0.12s; }
+.qbtn { -webkit-user-select: none; user-select: none; touch-action: manipulation; }
+@media (prefers-reduced-motion: reduce) { .qwrap.jig .qbtn:not(.add) { animation: none; } }
