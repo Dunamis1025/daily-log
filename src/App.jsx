@@ -502,6 +502,7 @@ export default function App() {
   const [toast, setToast] = useState(null); // { msg, undo, act }
   const [armedId, setArmedId] = useState(null);
   const [editing, setEditing] = useState(false);
+  const [memoOpen, setMemoOpen] = useState(false);
   // 아이폰 홈 화면처럼: 항목을 길게 누르면 편집 모드(흔들리며 ✕)가 켜진다
   const pressed = useRef({ timer: null, x: 0, y: 0, fired: false });
   const pressEnd = () => {
@@ -1014,7 +1015,7 @@ export default function App() {
             <header className="topbar">
               <h1>{t('appTitle')}</h1>
               <div className="topright">
-                {chip && (
+                {chip && chip.icon === '⚠️' && (
                   <button className={chip.icon === '⚠️' ? 'syncchip warn' : 'syncchip'} onClick={() => setTab('settings')}>
                     {chip.icon} {chip.text}
                   </button>
@@ -1116,10 +1117,12 @@ export default function App() {
                         </div>
                       );
                     })}
-                    <button className="qbtn add" onClick={() => setSheet({ type: 'habit', habit: null, group: g.id })}>
-                      <span className="qe">＋</span>
-                      <span className="qn">{t('newItem')}</span>
-                    </button>
+                    {editing && (
+                      <button className="qbtn add" onClick={() => setSheet({ type: 'habit', habit: null, group: g.id })}>
+                        <span className="qe">＋</span>
+                        <span className="qn">{t('newItem')}</span>
+                      </button>
+                    )}
                   </div>
                 </section>
               );
@@ -1186,17 +1189,19 @@ export default function App() {
 
             <div className="card summary">
               <div className="card-head">
-                <h2 className="sec nomargin">{t('memoTitle')}</h2>
+                <button className="memotoggle" aria-expanded={memoOpen} onClick={() => setMemoOpen(!memoOpen)}>
+                  {t('memoTitle')} <span aria-hidden="true">{memoOpen ? '▴' : '▾'}</span>
+                </button>
                 <button className="primary small" onClick={copySummary}>{t('copy')}</button>
               </div>
-              {dayTotals.length > 0 && (
+              {memoOpen && dayTotals.length > 0 && (
                 <div className="totals">
                   {dayTotals.map((x) => (
                     <span className="pill" key={x.name}>{x.emoji} {x.name} {fmtDur(x.min, lang)}</span>
                   ))}
                 </div>
               )}
-              <pre className="memo">{summary}</pre>
+              {memoOpen && <pre className="memo">{summary}</pre>}
             </div>
           </>
         )}
@@ -1258,6 +1263,7 @@ export default function App() {
             draft={sheet.draft}
             isNew={sheet.isNew}
             prevEnd={sheet.prevEnd}
+            entries={entries}
             onClose={() => setSheet(null)}
             onSave={saveEntry}
             onCreateHabit={(h) => saveHabit(h, true)}
@@ -1489,7 +1495,7 @@ function newHabitFrom(v, fallbackGroup) {
 
 const DURATIONS = [15, 30, 45, 60, 90, 120];
 
-function EntrySheet({ habits, phrases, defaultGroup, draft, isNew, prevEnd, onClose, onSave, onDelete, onCreateHabit, onCreatePhrase }) {
+function EntrySheet({ habits, phrases, defaultGroup, draft, isNew, prevEnd, entries, onClose, onSave, onDelete, onCreateHabit, onCreatePhrase }) {
   const { t, lang, nm } = useI18n();
   const [f, setF] = useState(draft);
   const [creating, setCreating] = useState(false);
@@ -1498,11 +1504,27 @@ function EntrySheet({ habits, phrases, defaultGroup, draft, isNew, prevEnd, onCl
   const [err, setErr] = useState('');
   const [confirmDel, setConfirmDel] = useState(false);
   const [last, setLast] = useState('end'); // 시작/끝 중 마지막으로 고친 쪽 (길이 버튼의 기준)
+  const [showLen, setShowLen] = useState(false);
+  const [showDate, setShowDate] = useState(false);
   const taRef = useRef(null);
+  const sofarRef = useRef(null);
 
   useEffect(() => {
     if (isNew && taRef.current) taRef.current.focus();
   }, [isNew]);
+
+  // 적는 중에도 "이 날 지금까지" 한 일이 보이도록 (시트 맨 위에 작게)
+  const sofar = useMemo(
+    () =>
+      entries
+        .filter((e) => e.id !== f.id && (e.start.slice(0, 10) === f.date || (e.end && e.end.slice(0, 10) === f.date)))
+        .sort((a, b) => (a.start < b.start ? -1 : 1)),
+    [entries, f.id, f.date]
+  );
+  useEffect(() => {
+    const el = sofarRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [sofar]);
 
   const choices =
     draft.ghost && !habits.some((h) => h.id === draft.ghost.id) ? [...habits, draft.ghost] : habits;
@@ -1607,6 +1629,28 @@ function EntrySheet({ habits, phrases, defaultGroup, draft, isNew, prevEnd, onCl
           <button className="linkbtn" onClick={onClose}>{t('close')}</button>
         </div>
 
+        {sofar.length > 0 && (
+          <div className="sofar-wrap">
+            <div className="label tight0">{t('sofarLbl', { date: dayLabel(f.date, lang) })}</div>
+            <div className="sofar" ref={sofarRef}>
+              {sofar.map((e) => {
+                const tm = e.approx ? t(`slot_${e.slot}`) : e.kind === 'check' ? hm(e.start) : `${hm(e.start)}–${e.end ? hm(e.end) : ''}`;
+                const first = e.note.trim().split('\n')[0];
+                return (
+                  <div className="sofar-row" key={e.id}>
+                    <span className="sofar-t">{tm}</span>
+                    <span className="sofar-x">
+                      {e.name ? `${e.emoji} ${nm(e.habitId, e.name)}` : ''}
+                      {e.name && first ? ' · ' : ''}
+                      {first}
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
         <div className="seg modeseg">
           <button className={!f.approx ? 'on' : ''} onClick={() => set({ approx: false })}>{t('modeExact')}</button>
           <button className={f.approx ? 'on' : ''} onClick={() => set({ approx: true, habitId: '' })}>{t('modeApprox')}</button>
@@ -1667,18 +1711,22 @@ function EntrySheet({ habits, phrases, defaultGroup, draft, isNew, prevEnd, onCl
           {timed && (
             <>
               <button className="chip" onClick={() => { setLast('end'); set({ end: timeStr(new Date()) }); }}>{t('endNow')}</button>
-              <button className="chip" onClick={() => set({ end: '' })}>{t('endClear')}</button>
+              {f.end && <button className="chip" onClick={() => set({ end: '' })}>{t('endClear')}</button>}
             </>
           )}
         </div>
         {timed && (
           <>
-            <div className="label">{t('byLength')}</div>
-            <div className="chips">
-              {DURATIONS.map((m) => (
-                <button key={m} className="chip" onClick={() => applyDuration(m)}>{fmtDur(m, lang)}</button>
-              ))}
-            </div>
+            <button className="linkbtn lentoggle" aria-expanded={showLen} onClick={() => setShowLen(!showLen)}>
+              {t('byLength')} {showLen ? '▴' : '▾'}
+            </button>
+            {showLen && (
+              <div className="chips">
+                {DURATIONS.map((m) => (
+                  <button key={m} className="chip" onClick={() => applyDuration(m)}>{fmtDur(m, lang)}</button>
+                ))}
+              </div>
+            )}
           </>
         )}
         {info && <div className="info">{info}</div>}
@@ -1698,7 +1746,7 @@ function EntrySheet({ habits, phrases, defaultGroup, draft, isNew, prevEnd, onCl
         />
 
         <div className="label">{t('phrasesLabel')}</div>
-        <div className="chips">
+        <div className="chips hscroll">
           {phrases.map((p) => (
             <button
               key={p.id}
@@ -1731,7 +1779,7 @@ function EntrySheet({ habits, phrases, defaultGroup, draft, isNew, prevEnd, onCl
         {!f.approx && (
         <>
         <div className="label">{t('itemOptional')}</div>
-        <div className="chips">
+        <div className="chips hscroll">
           <button className={!f.habitId ? 'chip sel' : 'chip'} onClick={() => set({ habitId: '' })}>{t('none')}</button>
           {choices.map((h) => (
             <button
@@ -1756,8 +1804,12 @@ function EntrySheet({ habits, phrases, defaultGroup, draft, isNew, prevEnd, onCl
         </>
         )}
 
-        <div className="label">{t('dateLbl')}</div>
-        <input className="time" type="date" aria-label={t('dateLbl')} value={f.date} onChange={(e) => set({ date: e.target.value })} />
+        <button className="linkbtn datetoggle" aria-expanded={showDate} onClick={() => setShowDate(!showDate)}>
+          {t('dateLbl')}: {dayLabel(f.date, lang)} · {t('dateChange')}
+        </button>
+        {showDate && (
+          <input className="time" type="date" aria-label={t('dateLbl')} value={f.date} onChange={(e) => set({ date: e.target.value })} />
+        )}
 
         {err && <div className="err">{err}</div>}
         <button className="primary wide" onClick={save}>{t('save')}</button>

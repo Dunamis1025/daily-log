@@ -301,3 +301,18 @@ button:disabled { opacity: 0.4; cursor: default; }
 .qwrap.jig:nth-child(even) .qbtn:not(.add) { animation-delay: -0.12s; }
 .qbtn { -webkit-user-select: none; user-select: none; touch-action: manipulation; }
 @media (prefers-reduced-motion: reduce) { .qwrap.jig .qbtn:not(.add) { animation: none; } }
+
+/* 기록 추가 창 정리: 이 날 지금까지 + 한 줄로 밀어 보는 버튼들 + 접는 항목 */
+.sofar-wrap { margin-top: 8px; }
+.sofar {
+  max-height: 132px; overflow-y: auto; -webkit-overflow-scrolling: touch; background: var(--card);
+  border: 1px solid var(--line); border-radius: 14px; padding: 6px 10px;
+}
+.sofar-row { display: flex; gap: 10px; padding: 3px 0; font-size: 14px; line-height: 1.45; }
+.sofar-t { flex: none; min-width: 78px; color: var(--muted); font-variant-numeric: tabular-nums; font-weight: 600; }
+.sofar-x { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chips.hscroll { flex-wrap: nowrap; overflow-x: auto; margin: 0 -16px; padding: 2px 16px 6px; -webkit-overflow-scrolling: touch; scrollbar-width: none; }
+.chips.hscroll::-webkit-scrollbar { display: none; }
+.chips.hscroll .chip { flex: none; }
+.lentoggle, .datetoggle { display: block; margin-top: 6px; padding: 8px 2px; font-size: 14px; color: var(--muted); text-align: left; }
+.memotoggle { background: none; border: 0; padding: 6px 0; font-size: 15px; font-weight: 600; color: var(--muted); }
