@@ -503,6 +503,7 @@ export default function App() {
   const [armedId, setArmedId] = useState(null);
   const [editing, setEditing] = useState(false);
   const [memoOpen, setMemoOpen] = useState(false);
+  const [pastN, setPastN] = useState(2); // 지난 기록을 몇 날 보여 줄지
   // 아이폰 홈 화면처럼: 항목을 길게 누르면 편집 모드(흔들리며 ✕)가 켜진다
   const pressed = useRef({ timer: null, x: 0, y: 0, fired: false });
   const pressEnd = () => {
@@ -816,6 +817,29 @@ export default function App() {
     [entries, day]
   );
 
+  // 보고 있는 날 이전에 기록이 있는 날들 (기록 없는 날은 건너뜀) — 기억을 더듬으며 적을 수 있게
+  const past = useMemo(() => {
+    const byDay = new Map();
+    entries.forEach((e) => {
+      const d = e.start.slice(0, 10);
+      if (!byDay.has(d)) byDay.set(d, []);
+      byDay.get(d).push(e);
+    });
+    const out = [];
+    let more = false;
+    for (let k = 1; k <= 120; k += 1) {
+      const d = addDays(day, -k);
+      const list = (byDay.get(d) || []).sort((a, b) => (a.start < b.start ? -1 : 1));
+      const diary = ((data.days[d] || {}).text || '').trim();
+      if (!list.length && !diary) continue;
+      if (out.length >= pastN) {
+        more = true;
+        break;
+      }
+      out.push({ d, list, diary });
+    }
+    return { out, more };
+  }, [entries, data.days, day, pastN]);
   const approxEntries = useMemo(
     () => entries.filter((e) => e.approx && e.start.slice(0, 10) === day).sort((a, b) => (a.start < b.start ? -1 : 1)),
     [entries, day]
@@ -1173,6 +1197,53 @@ export default function App() {
                     />
                   ))}
                 </ul>
+              </>
+            )}
+
+            {past.out.length > 0 && (
+              <>
+                <h2 className="sec">{t('pastTitle')}</h2>
+                {past.out.map((p) => {
+                  const tag = p.d === addDays(today, -1) ? t('yesterday') : p.d === addDays(today, -2) ? t('dayBefore') : '';
+                  return (
+                    <div className="card past" key={p.d}>
+                      <button
+                        className="pasthead"
+                        onClick={() => {
+                          setDay(p.d);
+                          window.scrollTo({ top: 0 });
+                        }}
+                      >
+                        <span>
+                          {tag && <span className="daytag">{tag}</span>} {dayLabel(p.d, lang)}
+                        </span>
+                        <span className="pastgo">{t('pastOpen')} ›</span>
+                      </button>
+                      {p.list.map((e) => {
+                        const tm = e.approx
+                          ? t(`slot_${e.slot}`)
+                          : e.kind === 'check'
+                            ? hm(e.start)
+                            : `${hm(e.start)}–${e.end ? hm(e.end) : ''}`;
+                        const note = e.note.trim();
+                        return (
+                          <div className="sofar-row" key={e.id}>
+                            <span className="sofar-t">{tm}</span>
+                            <span className="sofar-x">
+                              {e.name ? `${e.emoji} ${nm(e.habitId, e.name)}` : ''}
+                              {e.name && note ? ' · ' : ''}
+                              {note}
+                            </span>
+                          </div>
+                        );
+                      })}
+                      {p.diary && <div className="pastdiary">{p.diary}</div>}
+                    </div>
+                  );
+                })}
+                {past.more && (
+                  <button className="ghost wide" onClick={() => setPastN(pastN + 3)}>{t('pastMore')}</button>
+                )}
               </>
             )}
 

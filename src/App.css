@@ -316,3 +316,11 @@ button:disabled { opacity: 0.4; cursor: default; }
 .chips.hscroll .chip { flex: none; }
 .lentoggle, .datetoggle { display: block; margin-top: 6px; padding: 8px 2px; font-size: 14px; color: var(--muted); text-align: left; }
 .memotoggle { background: none; border: 0; padding: 6px 0; font-size: 15px; font-weight: 600; color: var(--muted); }
+
+/* 지난 기록 */
+.past { margin-bottom: 10px; padding: 10px 12px; }
+.pasthead { width: 100%; display: flex; align-items: center; justify-content: space-between; background: none; border: 0; padding: 4px 0 6px; font-weight: 700; font-size: 15px; text-align: left; }
+.pastgo { color: var(--accent); font-size: 13px; font-weight: 600; }
+.past .sofar-x { white-space: pre-wrap; word-break: break-word; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow: hidden; }
+.pastdiary { margin-top: 6px; padding-top: 6px; border-top: 1px dashed var(--line); color: var(--muted); font-size: 14px; white-space: pre-wrap; word-break: break-word; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow: hidden; }
+.ghost.wide { margin-bottom: 12px; }
