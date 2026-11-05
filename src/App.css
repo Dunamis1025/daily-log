@@ -324,3 +324,17 @@ button:disabled { opacity: 0.4; cursor: default; }
 .past .sofar-x { white-space: pre-wrap; word-break: break-word; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow: hidden; }
 .pastdiary { margin-top: 6px; padding-top: 6px; border-top: 1px dashed var(--line); color: var(--muted); font-size: 14px; white-space: pre-wrap; word-break: break-word; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow: hidden; }
 .ghost.wide { margin-bottom: 12px; }
+
+/* 목표 시간(진행 바) */
+.running.col { flex-direction: column; align-items: stretch; gap: 8px; }
+.runtop { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.goalrow { display: flex; flex-direction: column; gap: 4px; }
+.gbar { height: 10px; border-radius: 999px; background: rgba(128, 128, 128, 0.28); overflow: hidden; }
+.gbar i { display: block; height: 100%; background: var(--accent); border-radius: 999px; transition: width 0.4s; }
+.gtext { display: flex; justify-content: space-between; font-size: 14px; font-weight: 700; }
+.gof { font-weight: 500; color: var(--muted); }
+.runlinks { display: flex; gap: 16px; }
+.runlinks .linkbtn { padding: 4px 0; font-size: 14px; }
+.goalpick .timerow { margin-top: 6px; }
+.goalok { color: var(--accent); font-weight: 700; }
+.goalno { color: var(--muted); font-weight: 500; font-size: 12px; }

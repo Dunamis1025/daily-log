@@ -181,6 +181,7 @@ function normalizePhrase(p, idx = 0) {
 function normalizeEntry(e) {
   if (!e || typeof e !== 'object' || typeof e.start !== 'string' || !STAMP_RE.test(e.start)) return null;
   const start = e.start.slice(0, 16);
+  const goal = Number.isFinite(e.goal) && e.goal > 0 ? Math.min(Math.round(e.goal), 1440) : 0; // 목표 시간(분)
   const approx = !!e.approx; // "대략 적기": 시각을 모를 때. 길이 계산·통계에 넣지 않음
   const slot = SLOTS.includes(e.slot) ? e.slot : 'all';
   const habitId = e.habitId && !approx ? String(e.habitId) : '';
@@ -206,6 +207,7 @@ function normalizeEntry(e) {
     note: String(e.note || '').slice(0, 4000),
     approx,
     slot,
+    goal: kind === 'timed' ? goal : 0,
     u,
   };
 }
@@ -503,6 +505,9 @@ export default function App() {
   const [armedId, setArmedId] = useState(null);
   const [editing, setEditing] = useState(false);
   const [memoOpen, setMemoOpen] = useState(false);
+  const [goalFor, setGoalFor] = useState(null); // 목표 시간 고르는 칸이 열린 타이머 id
+  const [goalCustom, setGoalCustom] = useState('');
+  const goalSeen = useRef(new Set());
   const [pastN, setPastN] = useState(2); // 지난 기록을 몇 날 보여 줄지
   // 아이폰 홈 화면처럼: 항목을 길게 누르면 편집 모드(흔들리며 ✕)가 켜진다
   const pressed = useRef({ timer: null, x: 0, y: 0, fired: false });
@@ -804,6 +809,20 @@ export default function App() {
     [entries]
   );
 
+  useEffect(() => {
+    running.forEach((e) => {
+      if (!e.goal || goalSeen.current.has(e.id)) return;
+      const el = Math.round((now - parseStamp(e.start)) / 60000);
+      if (el < e.goal) return;
+      goalSeen.current.add(e.id);
+      if (el - e.goal <= 3) {
+        // 막 도달했을 때만 알림. 앱을 오랜만에 열었을 땐 조용히 "달성"으로만 표시
+        if (navigator.vibrate) navigator.vibrate([200, 100, 200]);
+        setToast({ msg: t('goalReached', { name: nm(e.habitId, e.name) }), undo: null, act: null });
+      }
+    });
+  }, [now, running, t, nm]);
+
   const dayEntries = useMemo(
     () =>
       entries
@@ -901,6 +920,7 @@ export default function App() {
         note: e.note,
         approx: !!e.approx,
         slot: e.slot || 'all',
+        goal: e.goal || 0,
         ghost: e.habitId ? { id: e.habitId, name: e.name, emoji: e.emoji, kind: e.kind } : null,
       },
     });
@@ -945,6 +965,13 @@ export default function App() {
       label: t('noteBtn'), fn: () => openEditEntry(done),
     });
     setDay(dayStr(tm));
+  }
+
+  function setGoal(run, minutes) {
+    upsertEntry({ ...run, goal: minutes > 0 ? Math.min(Math.round(minutes), 1440) : 0 });
+    goalSeen.current.delete(run.id);
+    setGoalFor(null);
+    setGoalCustom('');
   }
 
   /* ── 기록 추가: 직전 기록이 끝난 시각에서 이어서 시작 ── */
@@ -1068,21 +1095,65 @@ export default function App() {
               )}
             </div>
 
-            {running.map((e) => (
-              <div className="running" key={e.id}>
-                <div>
-                  <div className="running-name">⏱ {e.emoji} {nm(e.habitId, e.name)}</div>
-                  <div className="running-sub">
-                    {e.start.slice(0, 10) !== today ? `${dayLabel(e.start.slice(0, 10), lang)} ` : ''}
-                    {t('runningSub', {
-                      time: e.start.slice(11),
-                      dur: fmtDur(Math.max(0, Math.round((now - parseStamp(e.start)) / 60000)), lang),
-                    })}
+            {running.map((e) => {
+              const el = Math.max(0, Math.round((now - parseStamp(e.start)) / 60000));
+              const left = e.goal ? e.goal - el : 0;
+              return (
+                <div className="running col" key={e.id}>
+                  <div className="runtop">
+                    <div>
+                      <div className="running-name">⏱ {e.emoji} {nm(e.habitId, e.name)}</div>
+                      <div className="running-sub">
+                        {e.start.slice(0, 10) !== today ? `${dayLabel(e.start.slice(0, 10), lang)} ` : ''}
+                        {t('runningSub', { time: e.start.slice(11), dur: fmtDur(el, lang) })}
+                      </div>
+                    </div>
+                    <button className="stopbtn" onClick={(ev) => { ev.stopPropagation(); stop(e); }}>{t('stop')}</button>
                   </div>
+                  {e.goal > 0 && (
+                    <div className="goalrow">
+                      <div className="gbar" role="progressbar" aria-valuemin={0} aria-valuemax={e.goal} aria-valuenow={Math.min(el, e.goal)}>
+                        <i style={{ width: `${Math.min(100, (el / e.goal) * 100)}%` }} />
+                      </div>
+                      <div className="gtext">
+                        <span>{left > 0 ? t('goalLeft', { dur: fmtDur(left, lang) }) : t('goalOver', { dur: fmtDur(-left, lang) })}</span>
+                        <span className="gof">{t('goalOf', { dur: fmtDur(e.goal, lang) })}</span>
+                      </div>
+                    </div>
+                  )}
+                  <div className="runlinks">
+                    <button className="linkbtn" aria-expanded={goalFor === e.id} onClick={() => setGoalFor(goalFor === e.id ? null : e.id)}>
+                      {e.goal ? t('goalChange') : t('goalSet')}
+                    </button>
+                    <button className="linkbtn" onClick={() => openEditEntry(e)}>{t('editRun')}</button>
+                  </div>
+                  {goalFor === e.id && (
+                    <div className="goalpick">
+                      <div className="chips">
+                        {[30, 45, 60, 90, 120, 180].map((m) => (
+                          <button key={m} className={e.goal === m ? 'chip sel' : 'chip'} onClick={() => setGoal(e, m)}>{fmtDur(m, lang)}</button>
+                        ))}
+                        {e.goal > 0 && <button className="chip" onClick={() => setGoal(e, 0)}>{t('goalClear')}</button>}
+                      </div>
+                      <div className="timerow phrase-new">
+                        <input
+                          className="text"
+                          type="number"
+                          inputMode="numeric"
+                          min="1"
+                          max="1440"
+                          placeholder={t('goalCustomPh')}
+                          value={goalCustom}
+                          onChange={(ev) => setGoalCustom(ev.target.value)}
+                          onKeyDown={(ev) => ev.key === 'Enter' && Number(goalCustom) > 0 && setGoal(e, Number(goalCustom))}
+                        />
+                        <button className="mini" disabled={!(Number(goalCustom) > 0)} onClick={() => setGoal(e, Number(goalCustom))}>{t('ok')}</button>
+                      </div>
+                    </div>
+                  )}
                 </div>
-                <button className="stopbtn" onClick={(ev) => { ev.stopPropagation(); stop(e); }}>{t('stop')}</button>
-              </div>
-            ))}
+              );
+            })}
 
             {editing && <p className="hint nomargin">{t('editHint')}</p>}
 
@@ -1453,7 +1524,12 @@ function EntryRow({ e, day, armed, onArm, onOpen, onDelete }) {
           {note && <div className={e.name ? 'row-note' : 'row-note solo'}>{note}</div>}
           {!e.name && !note && <div className="row-note">{t('noContent')}</div>}
         </div>
-        {min !== null && <div className="row-dur">{fmtDur(min, lang)}</div>}
+        {min !== null && (
+          <div className="row-dur">
+            {fmtDur(min, lang)}
+            {e.goal > 0 && <span className={min >= e.goal ? 'goalok' : 'goalno'}>{min >= e.goal ? ' ✓' : ` / ${fmtDur(e.goal, lang)}`}</span>}
+          </div>
+        )}
       </button>
     </li>
   );
@@ -1689,6 +1765,7 @@ function EntrySheet({ habits, phrases, defaultGroup, draft, isNew, prevEnd, entr
       note: f.note.trim(),
       approx: false,
       slot: 'all',
+      goal: f.goal || 0,
     });
   }
 
