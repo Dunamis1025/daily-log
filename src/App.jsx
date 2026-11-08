@@ -1732,6 +1732,31 @@ function newHabitFrom(v, fallbackGroup) {
 
 const DURATIONS = [15, 30, 45, 60, 90, 120];
 
+// 5분 단위 시각 고르기: 시 / 분(00, 05, 10…)을 따로 고르는 선택창. 5분 단위가 꺼져 있으면 기본 시계 입력을 그대로 씀.
+const HOURS = Array.from({ length: 24 }, (_, i) => String(i).padStart(2, '0'));
+const MINS5 = Array.from({ length: 12 }, (_, i) => String(i * 5).padStart(2, '0'));
+const TimeField = React.forwardRef(function TimeField({ value, onChange, step5, ariaLabel }, ref) {
+  if (!step5) {
+    return <input className="time" type="time" aria-label={ariaLabel} ref={ref} value={value} onChange={(e) => onChange(e.target.value)} />;
+  }
+  const [h, m] = value ? value.split(':') : ['', ''];
+  const mins = m && !MINS5.includes(m) ? [...MINS5, m].sort() : MINS5; // 예전에 1분 단위로 적은 값도 그대로 보임
+  const nowH = () => String(new Date().getHours()).padStart(2, '0');
+  return (
+    <div className="time tsel" role="group" aria-label={ariaLabel}>
+      <select aria-label={ariaLabel + ' 시'} ref={ref} value={h || ''} onChange={(e) => onChange(e.target.value ? `${e.target.value}:${m || '00'}` : '')}>
+        {!value && <option value="">--</option>}
+        {HOURS.map((x) => <option key={x} value={x}>{x}</option>)}
+      </select>
+      <span className="colon">:</span>
+      <select aria-label={ariaLabel + ' 분'} value={m || ''} onChange={(e) => onChange(`${h || nowH()}:${e.target.value}`)}>
+        {!value && <option value="">--</option>}
+        {mins.map((x) => <option key={x} value={x}>{x}</option>)}
+      </select>
+    </div>
+  );
+});
+
 function EntrySheet({ habits, phrases, defaultGroup, draft, isNew, prevEnd, entries, round5, onClose, onSave, onDelete, onCreateHabit, onCreatePhrase }) {
   const { t, lang, nm } = useI18n();
   const [f, setF] = useState(draft);
@@ -1963,25 +1988,23 @@ function EntrySheet({ habits, phrases, defaultGroup, draft, isNew, prevEnd, entr
             <div className="timegrid">
               <div>
                 <div className="label">{timed ? t('start') : t('at')}</div>
-                <input
-                  className="time"
-                  type="time"
-                  aria-label={t('startAria')}
+                <TimeField
+                  step5={round5}
+                  ariaLabel={t('startAria')}
                   ref={startRef}
                   value={f.start}
-                  onChange={(e) => { setLast('start'); set({ start: e.target.value }); }}
+                  onChange={(v) => { setLast('start'); set({ start: v }); }}
                 />
               </div>
               {timed && (
                 <div>
                   <div className="label">{t('end')}</div>
-                  <input
-                    className="time"
-                    type="time"
-                    aria-label={t('endAria')}
+                  <TimeField
+                    step5={round5}
+                    ariaLabel={t('endAria')}
                     ref={endRef}
                     value={f.end}
-                    onChange={(e) => { setLast('end'); set({ end: e.target.value }); }}
+                    onChange={(v) => { setLast('end'); set({ end: v }); }}
                   />
                 </div>
               )}

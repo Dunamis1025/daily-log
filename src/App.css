@@ -358,3 +358,11 @@ mark { background: #ffe58a; color: #3b2a1d; border-radius: 3px; padding: 0 1px; 
 .timesum-i { font-size: 14px; color: var(--muted); }
 .chip.nudge { font-weight: 700; border-style: dashed; }
 .timebtn { background: none; border: 0; border-bottom: 2px dashed var(--accent); border-radius: 0; font: inherit; color: inherit; padding: 0 2px; min-height: 0; cursor: pointer; }
+
+/* 5분 단위 시각 선택창 (시 : 분) */
+.time.tsel { display: flex; align-items: center; justify-content: center; gap: 4px; padding: 4px 8px; }
+.time.tsel select {
+  flex: 1; min-width: 0; min-height: 44px; border: 0; background: transparent; color: inherit;
+  font: inherit; text-align: center; text-align-last: center; -webkit-appearance: none; appearance: none; border-radius: 10px;
+}
+.time.tsel .colon { font-weight: 700; color: var(--muted); }
