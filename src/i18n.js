@@ -55,8 +55,8 @@ const D = {
   todayEntries: ['오늘 기록', "Today's entries"],
   dayEntries: ['이 날의 기록', "This day's entries"],
   emptyDay: [
-    '아직 기록이 없어요. 위 항목을 탭하거나 "기록 추가"로 적어 보세요.',
-    'No entries yet. Tap an item above or use "Add entry".',
+    '아직 기록이 없어요. "뭐 했어요?" 버튼을 눌러 적어 보세요.',
+    'Nothing yet. Tap "What did you do?" to add something.',
   ],
   deletedMsg: ['{name}을(를) 지웠어요', 'Deleted {name}'],
   checkedAt: ['{name} · {time} 기록했어요', '{name} logged · {time}'],
