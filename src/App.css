@@ -351,3 +351,9 @@ button:disabled { opacity: 0.4; cursor: default; }
 .histmemo { margin-top: 8px; padding: 8px 10px; border-radius: 12px; background: var(--accent-soft); white-space: pre-wrap; word-break: break-word; font-size: 15px; line-height: 1.55; cursor: text; }
 .histedit { margin-top: 8px; }
 mark { background: #ffe58a; color: #3b2a1d; border-radius: 3px; padding: 0 1px; }
+
+/* 시각 대신 길이로 */
+.timesum { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 12px; margin: 12px 0 2px; padding: 10px 12px; border-radius: 14px; background: var(--accent-soft); }
+.timesum-t { font-size: 22px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.timesum-i { font-size: 14px; color: var(--muted); }
+.chip.nudge { font-weight: 700; border-style: dashed; }

@@ -18,9 +18,10 @@ function loadPrefs() {
     return {
       lang: p.lang === 'en' ? 'en' : 'ko',
       theme: THEMES.some((x) => x.id === p.theme) ? p.theme : 'wood',
+      round5: p.round5 !== false, // 기록 추가에서 "지금"을 5분 단위로 맞춤 (기본 켬)
     };
   } catch {
-    return { lang: 'ko', theme: 'wood' };
+    return { lang: 'ko', theme: 'wood', round5: true };
   }
 }
 function savePrefs(p) {
@@ -41,6 +42,7 @@ const useI18n = () => useContext(I18n);
 const WEEK = ['일', '월', '화', '수', '목', '금', '토'];
 const WEEK_EN = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 const MONTH_EN = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+const roundTo5 = (d) => new Date(Math.round(d.getTime() / 300000) * 300000);
 const pad = (n) => String(n).padStart(2, '0');
 const dayStr = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 const timeStr = (d) => `${pad(d.getHours())}:${pad(d.getMinutes())}`;
@@ -1051,11 +1053,12 @@ export default function App() {
     if (day === today) {
       if (prev) {
         startStamp = prev;
-        endTime = nowStamp > prev ? timeStr(tm) : '';
+        const r = prefs.round5 ? roundTo5(tm) : tm;
+        endTime = stampStr(r) > prev ? timeStr(r) : nowStamp > prev ? timeStr(tm) : '';
       } else {
-        const s = new Date(tm.getTime() - 30 * 60000);
-        startStamp = stampStr(s);
-        endTime = timeStr(tm);
+        const r = prefs.round5 ? roundTo5(tm) : tm;
+        startStamp = stampStr(new Date(r.getTime() - 30 * 60000));
+        endTime = timeStr(r);
       }
     } else if (prev) {
       startStamp = prev;
@@ -1492,6 +1495,7 @@ export default function App() {
             isNew={sheet.isNew}
             prevEnd={sheet.prevEnd}
             entries={entries}
+            round5={prefs.round5}
             onClose={() => setSheet(null)}
             onSave={saveEntry}
             onCreateHabit={(h) => saveHabit(h, true)}
@@ -1728,7 +1732,7 @@ function newHabitFrom(v, fallbackGroup) {
 
 const DURATIONS = [15, 30, 45, 60, 90, 120];
 
-function EntrySheet({ habits, phrases, defaultGroup, draft, isNew, prevEnd, entries, onClose, onSave, onDelete, onCreateHabit, onCreatePhrase }) {
+function EntrySheet({ habits, phrases, defaultGroup, draft, isNew, prevEnd, entries, round5, onClose, onSave, onDelete, onCreateHabit, onCreatePhrase }) {
   const { t, lang, nm } = useI18n();
   const [f, setF] = useState(draft);
   const [creating, setCreating] = useState(false);
@@ -1736,8 +1740,10 @@ function EntrySheet({ habits, phrases, defaultGroup, draft, isNew, prevEnd, entr
   const [newPhrase, setNewPhrase] = useState(null); // null이면 닫힘, 글자면 입력 중
   const [err, setErr] = useState('');
   const [confirmDel, setConfirmDel] = useState(false);
-  const [last, setLast] = useState('end'); // 시작/끝 중 마지막으로 고친 쪽 (길이 버튼의 기준)
-  const [showLen, setShowLen] = useState(false);
+  // 길이 버튼의 기준: 직전 기록 끝에서 이어 쓰는 중이면 시작을 고정하고 끝을 계산, 아니면 끝(지금)을 고정
+  const [last, setLast] = useState(!isNew || prevEnd ? 'start' : 'end');
+  const [showTimes, setShowTimes] = useState(!isNew);
+  const nowT = () => (round5 ? roundTo5(new Date()) : new Date());
   const [showDate, setShowDate] = useState(false);
   const taRef = useRef(null);
   const sofarRef = useRef(null);
@@ -1782,6 +1788,11 @@ function EntrySheet({ habits, phrases, defaultGroup, draft, isNew, prevEnd, entr
   }
 
   const endDayOf = (v) => (v.end && v.start && v.end < v.start ? addDays(v.date, 1) : v.date);
+
+  const curLen = f.start && f.end && f.end !== f.start ? toMin(f.end) + (f.end < f.start ? 1440 : 0) - toMin(f.start) : 0;
+  function nudge(delta) {
+    applyDuration(Math.max(5, curLen + delta));
+  }
 
   function applyDuration(mins) {
     if (last === 'start' && f.start && f.date) {
@@ -1903,68 +1914,79 @@ function EntrySheet({ habits, phrases, defaultGroup, draft, isNew, prevEnd, entr
 
         {!f.approx && (
         <>
-        <div className="timegrid">
-          <div>
-            <div className="label">{timed ? t('start') : t('at')}</div>
-            <input
-              className="time"
-              type="time"
-              aria-label={t('startAria')}
-              value={f.start}
-              onChange={(e) => { setLast('start'); set({ start: e.target.value }); }}
-            />
-          </div>
-          {timed && (
-            <div>
-              <div className="label">{t('end')}</div>
-              <input
-                className="time"
-                type="time"
-                aria-label={t('endAria')}
-                value={f.end}
-                onChange={(e) => { setLast('end'); set({ end: e.target.value }); }}
-              />
-            </div>
-          )}
-        </div>
-        <div className="chips tight">
-          {prevEnd && (
-            <button
-              className="chip"
-              onClick={() => { setLast('start'); set({ date: prevEnd.slice(0, 10), start: prevEnd.slice(11) }); }}
-            >
-              {t('fromPrev', { time: hm(prevEnd) })}
-            </button>
-          )}
-          <button
-            className="chip"
-            onClick={() => { const tm = new Date(); setLast('start'); set({ date: dayStr(tm), start: timeStr(tm) }); }}
-          >
-            {t('startNow')}
-          </button>
-          {timed && (
-            <>
-              <button className="chip" onClick={() => { setLast('end'); set({ end: timeStr(new Date()) }); }}>{t('endNow')}</button>
-              {f.end && <button className="chip" onClick={() => set({ end: '' })}>{t('endClear')}</button>}
-            </>
-          )}
+        <div className="timesum" aria-live="polite">
+          <span className="timesum-t">
+            {f.start ? hm(f.start) : '--:--'}
+            {timed && f.end ? ` → ${hm(f.end)}` : ''}
+          </span>
+          {info && <span className="timesum-i">{info}</span>}
         </div>
         {timed && (
           <>
-            <button className="linkbtn lentoggle" aria-expanded={showLen} onClick={() => setShowLen(!showLen)}>
-              {t('byLength')} {showLen ? '▴' : '▾'}
-            </button>
-            {showLen && (
-              <div className="chips">
-                {DURATIONS.map((m) => (
-                  <button key={m} className="chip" onClick={() => applyDuration(m)}>{fmtDur(m, lang)}</button>
-                ))}
-              </div>
-            )}
+            <div className="label">{t('lenLbl')}</div>
+            <div className="chips">
+              {DURATIONS.map((m) => (
+                <button key={m} className="chip" onClick={() => applyDuration(m)}>{fmtDur(m, lang)}</button>
+              ))}
+              <button className="chip nudge" aria-label={t('nudgeMinus')} onClick={() => nudge(-5)}>{t('nudgeMinus')}</button>
+              <button className="chip nudge" aria-label={t('nudgePlus')} onClick={() => nudge(5)}>{t('nudgePlus')}</button>
+            </div>
           </>
         )}
-        {info && <div className="info">{info}</div>}
-        <div className="hint">{t('nextDayHint')}</div>
+        <button className="linkbtn lentoggle" aria-expanded={showTimes} onClick={() => setShowTimes(!showTimes)}>
+          {t('timesToggle')} {showTimes ? '▴' : '▾'}
+        </button>
+        {showTimes && (
+          <>
+            <div className="timegrid">
+              <div>
+                <div className="label">{timed ? t('start') : t('at')}</div>
+                <input
+                  className="time"
+                  type="time"
+                  aria-label={t('startAria')}
+                  value={f.start}
+                  onChange={(e) => { setLast('start'); set({ start: e.target.value }); }}
+                />
+              </div>
+              {timed && (
+                <div>
+                  <div className="label">{t('end')}</div>
+                  <input
+                    className="time"
+                    type="time"
+                    aria-label={t('endAria')}
+                    value={f.end}
+                    onChange={(e) => { setLast('end'); set({ end: e.target.value }); }}
+                  />
+                </div>
+              )}
+            </div>
+            <div className="chips tight">
+              {prevEnd && (
+                <button
+                  className="chip"
+                  onClick={() => { setLast('start'); set({ date: prevEnd.slice(0, 10), start: prevEnd.slice(11) }); }}
+                >
+                  {t('fromPrev', { time: hm(prevEnd) })}
+                </button>
+              )}
+              <button
+                className="chip"
+                onClick={() => { const tm = nowT(); setLast('start'); set({ date: dayStr(tm), start: timeStr(tm) }); }}
+              >
+                {t('startNow')}
+              </button>
+              {timed && (
+                <>
+                  <button className="chip" onClick={() => { setLast('end'); set({ end: timeStr(nowT()) }); }}>{t('endNow')}</button>
+                  {f.end && <button className="chip" onClick={() => set({ end: '' })}>{t('endClear')}</button>}
+                </>
+              )}
+            </div>
+            <div className="hint">{t('nextDayHint')}</div>
+          </>
+        )}
 
         </>
         )}
@@ -2468,6 +2490,13 @@ function Settings({
         ))}
       </div>
       <p className="hint nomargin">{t('themeHint')}</p>
+
+      <h2 className="sec">{t('round5Title')}</h2>
+      <div className="seg">
+        <button className={prefs.round5 ? 'on' : ''} onClick={() => setPrefs((p) => ({ ...p, round5: true }))}>{t('round5On')}</button>
+        <button className={!prefs.round5 ? 'on' : ''} onClick={() => setPrefs((p) => ({ ...p, round5: false }))}>{t('round5Off')}</button>
+      </div>
+      <p className="hint nomargin">{t('round5Hint')}</p>
 
       <h2 className="sec">{t('syncTitle')}</h2>
       <div className="card">
