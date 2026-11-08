@@ -1743,6 +1743,9 @@ function EntrySheet({ habits, phrases, defaultGroup, draft, isNew, prevEnd, entr
   // 길이 버튼의 기준: 직전 기록 끝에서 이어 쓰는 중이면 시작을 고정하고 끝을 계산, 아니면 끝(지금)을 고정
   const [last, setLast] = useState(!isNew || prevEnd ? 'start' : 'end');
   const [showTimes, setShowTimes] = useState(!isNew);
+  const startRef = useRef(null);
+  const endRef = useRef(null);
+  const [pick, setPick] = useState(null); // 요약의 시각을 눌렀을 때 그 입력칸으로 가기: { w: 'start' | 'end', n }
   const nowT = () => (round5 ? roundTo5(new Date()) : new Date());
   const [showDate, setShowDate] = useState(false);
   const taRef = useRef(null);
@@ -1788,6 +1791,22 @@ function EntrySheet({ habits, phrases, defaultGroup, draft, isNew, prevEnd, entr
   }
 
   const endDayOf = (v) => (v.end && v.start && v.end < v.start ? addDays(v.date, 1) : v.date);
+
+  useEffect(() => {
+    if (!pick || !showTimes) return;
+    const el = pick.w === 'end' ? endRef.current : startRef.current;
+    if (!el) return;
+    el.focus();
+    try {
+      if (el.showPicker) el.showPicker();
+    } catch {
+      /* 일부 브라우저는 직접 눌러야 열림 */
+    }
+  }, [pick, showTimes]);
+  const pickTime = (w) => {
+    setShowTimes(true);
+    setPick({ w, n: Date.now() });
+  };
 
   const curLen = f.start && f.end && f.end !== f.start ? toMin(f.end) + (f.end < f.start ? 1440 : 0) - toMin(f.start) : 0;
   function nudge(delta) {
@@ -1916,8 +1935,11 @@ function EntrySheet({ habits, phrases, defaultGroup, draft, isNew, prevEnd, entr
         <>
         <div className="timesum" aria-live="polite">
           <span className="timesum-t">
-            {f.start ? hm(f.start) : '--:--'}
-            {timed && f.end ? ` → ${hm(f.end)}` : ''}
+            <button className="timebtn" title={t('startAria')} onClick={() => pickTime('start')}>{f.start ? hm(f.start) : '--:--'}</button>
+            {timed && ' → '}
+            {timed && (
+              <button className="timebtn" title={t('endAria')} onClick={() => pickTime('end')}>{f.end ? hm(f.end) : '--:--'}</button>
+            )}
           </span>
           {info && <span className="timesum-i">{info}</span>}
         </div>
@@ -1945,6 +1967,7 @@ function EntrySheet({ habits, phrases, defaultGroup, draft, isNew, prevEnd, entr
                   className="time"
                   type="time"
                   aria-label={t('startAria')}
+                  ref={startRef}
                   value={f.start}
                   onChange={(e) => { setLast('start'); set({ start: e.target.value }); }}
                 />
@@ -1956,6 +1979,7 @@ function EntrySheet({ habits, phrases, defaultGroup, draft, isNew, prevEnd, entr
                     className="time"
                     type="time"
                     aria-label={t('endAria')}
+                    ref={endRef}
                     value={f.end}
                     onChange={(e) => { setLast('end'); set({ end: e.target.value }); }}
                   />

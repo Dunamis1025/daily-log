@@ -357,3 +357,4 @@ mark { background: #ffe58a; color: #3b2a1d; border-radius: 3px; padding: 0 1px; 
 .timesum-t { font-size: 22px; font-weight: 700; font-variant-numeric: tabular-nums; }
 .timesum-i { font-size: 14px; color: var(--muted); }
 .chip.nudge { font-weight: 700; border-style: dashed; }
+.timebtn { background: none; border: 0; border-bottom: 2px dashed var(--accent); border-radius: 0; font: inherit; color: inherit; padding: 0 2px; min-height: 0; cursor: pointer; }
