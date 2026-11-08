@@ -19,9 +19,10 @@ function loadPrefs() {
       lang: p.lang === 'en' ? 'en' : 'ko',
       theme: THEMES.some((x) => x.id === p.theme) ? p.theme : 'wood',
       round5: p.round5 !== false, // 기록 추가에서 "지금"을 5분 단위로 맞춤 (기본 켬)
+      homeGrid: p.homeGrid === true, // 오늘 화면에 자주 쓰는 항목 칸을 계속 보임 (기본 끔)
     };
   } catch {
-    return { lang: 'ko', theme: 'wood', round5: true };
+    return { lang: 'ko', theme: 'wood', round5: true, homeGrid: false };
   }
 }
 function savePrefs(p) {
@@ -1142,7 +1143,7 @@ export default function App() {
                   </button>
                 )}
                 <button className={editing ? 'editbtn on' : 'editbtn'} onClick={() => setEditing(!editing)}>
-                  {editing ? t('done') : t('edit')}
+                  {editing ? t('done') : prefs.homeGrid ? t('edit') : t('editItems')}
                 </button>
               </div>
             </header>
@@ -1246,7 +1247,7 @@ export default function App() {
 
             {editing && <p className="hint nomargin">{t('editHint')}</p>}
 
-            {groupedHabits.map(({ g, list }, gi) => {
+            {(editing || prefs.homeGrid) && groupedHabits.map(({ g, list }, gi) => {
               const gname = nm(g.id, g.name);
               const ids = list.map((x) => x.id);
               return (
@@ -1958,6 +1959,34 @@ function EntrySheet({ habits, phrases, defaultGroup, draft, isNew, prevEnd, entr
 
         {!f.approx && (
         <>
+        <div className="label">{t('itemPick')}</div>
+        <div className="chips">
+          <button className={!f.habitId ? 'chip sel' : 'chip'} onClick={() => set({ habitId: '' })}>{t('none')}</button>
+          {choices.map((h) => (
+            <button
+              key={h.id}
+              className={f.habitId === h.id ? 'chip sel' : 'chip'}
+              onClick={() => set({ habitId: h.id })}
+            >
+              {h.emoji} {nm(h.id, h.name)}
+            </button>
+          ))}
+          <button className={creating ? 'chip sel' : 'chip dashed'} onClick={() => setCreating(!creating)}>
+            {t('plusItem')}
+          </button>
+        </div>
+        {creating && (
+          <div className="inline-new">
+            <HabitFields v={hv} onChange={(p) => setHv({ ...hv, ...p })} />
+            <button className="primary wide" disabled={!hv.name.trim()} onClick={makeHabit}>{t('makeItem')}</button>
+          </div>
+        )}
+
+        </>
+        )}
+
+        {!f.approx && (
+        <>
         <div className="timesum" aria-live="polite">
           <span className="timesum-t">
             <button className="timebtn" title={t('startAria')} onClick={() => pickTime('start')}>{f.start ? hm(f.start) : '--:--'}</button>
@@ -1975,6 +2004,7 @@ function EntrySheet({ habits, phrases, defaultGroup, draft, isNew, prevEnd, entr
               {DURATIONS.map((m) => (
                 <button key={m} className="chip" onClick={() => applyDuration(m)}>{fmtDur(m, lang)}</button>
               ))}
+              <button className="chip" onClick={() => { const tm = nowT(); setLast('start'); set({ date: dayStr(tm), start: timeStr(tm), end: '' }); }}>{t('startFromNow')}</button>
               <button className="chip nudge" aria-label={t('nudgeMinus')} onClick={() => nudge(-5)}>{t('nudgeMinus')}</button>
               <button className="chip nudge" aria-label={t('nudgePlus')} onClick={() => nudge(5)}>{t('nudgePlus')}</button>
             </div>
@@ -2079,33 +2109,6 @@ function EntrySheet({ habits, phrases, defaultGroup, draft, isNew, prevEnd, entr
           </div>
         )}
 
-        {!f.approx && (
-        <>
-        <div className="label">{t('itemOptional')}</div>
-        <div className="chips hscroll">
-          <button className={!f.habitId ? 'chip sel' : 'chip'} onClick={() => set({ habitId: '' })}>{t('none')}</button>
-          {choices.map((h) => (
-            <button
-              key={h.id}
-              className={f.habitId === h.id ? 'chip sel' : 'chip'}
-              onClick={() => set({ habitId: h.id })}
-            >
-              {h.emoji} {nm(h.id, h.name)}
-            </button>
-          ))}
-          <button className={creating ? 'chip sel' : 'chip dashed'} onClick={() => setCreating(!creating)}>
-            {t('plusItem')}
-          </button>
-        </div>
-        {creating && (
-          <div className="inline-new">
-            <HabitFields v={hv} onChange={(p) => setHv({ ...hv, ...p })} />
-            <button className="primary wide" disabled={!hv.name.trim()} onClick={makeHabit}>{t('makeItem')}</button>
-          </div>
-        )}
-
-        </>
-        )}
 
         <button className="linkbtn datetoggle" aria-expanded={showDate} onClick={() => setShowDate(!showDate)}>
           {t('dateLbl')}: {dayLabel(f.date, lang)} · {t('dateChange')}
@@ -2537,6 +2540,13 @@ function Settings({
         ))}
       </div>
       <p className="hint nomargin">{t('themeHint')}</p>
+
+      <h2 className="sec">{t('homeGridTitle')}</h2>
+      <div className="seg">
+        <button className={!prefs.homeGrid ? 'on' : ''} onClick={() => setPrefs((p) => ({ ...p, homeGrid: false }))}>{t('homeGridOff')}</button>
+        <button className={prefs.homeGrid ? 'on' : ''} onClick={() => setPrefs((p) => ({ ...p, homeGrid: true }))}>{t('homeGridOn')}</button>
+      </div>
+      <p className="hint nomargin">{t('homeGridHint')}</p>
 
       <h2 className="sec">{t('round5Title')}</h2>
       <div className="seg">
