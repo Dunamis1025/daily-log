@@ -338,3 +338,16 @@ button:disabled { opacity: 0.4; cursor: default; }
 .goalpick .timerow { margin-top: 6px; }
 .goalok { color: var(--accent); font-weight: 700; }
 .goalno { color: var(--muted); font-weight: 500; font-size: 12px; }
+
+/* 메모(자유 글)와 메모장 탭 */
+.memobox { margin-top: 12px; }
+.memobox .area { margin-top: 8px; min-height: 150px; font-size: 17px; }
+.memofound { margin-top: 8px; align-items: center; }
+.searchbox { margin: 4px 0 10px; }
+.histcard { margin-bottom: 10px; padding: 10px 12px; }
+.histrow { display: flex; gap: 10px; padding: 5px 0; font-size: 15px; line-height: 1.5; cursor: pointer; border-radius: 8px; }
+.histrow:active { background: var(--accent-soft); }
+.histtext { min-width: 0; white-space: pre-wrap; word-break: break-word; }
+.histmemo { margin-top: 8px; padding: 8px 10px; border-radius: 12px; background: var(--accent-soft); white-space: pre-wrap; word-break: break-word; font-size: 15px; line-height: 1.55; cursor: text; }
+.histedit { margin-top: 8px; }
+mark { background: #ffe58a; color: #3b2a1d; border-radius: 3px; padding: 0 1px; }

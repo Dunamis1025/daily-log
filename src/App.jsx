@@ -440,6 +440,55 @@ function buildSummary(day, list, diary, lang, t, nm, approxList) {
   return lines.join('\n');
 }
 
+const RANGE_RE = /^\s*(\d{1,2})[:：](\d{2})\s*[-~–—]+\s*(\d{1,2})[:：](\d{2})\s*(.*)$/;
+const POINT_RE = /^\s*(\d{1,2})[:：](\d{2})\s+(.*)$/;
+const validHM = (h, m) => h >= 0 && h <= 24 && m >= 0 && m < 60;
+
+/* 메모(자유 글)에서 시간 기록을 읽어 낸다. 항목 이름으로 시작하는 줄만 인정. 이미 같은 시각에 버튼으로 적은 항목은 건너뜀(중복 방지) */
+function parseMemo(date, text, habits, entries) {
+  if (!text) return [];
+  const names = [];
+  habits.forEach((h) => {
+    const labels = new Set([h.name.toLowerCase()]);
+    ['ko', 'en'].forEach((lg) => labels.add(displayName(lg, h.id, h.name).toLowerCase()));
+    labels.forEach((l) => l && names.push([l, h]));
+  });
+  names.sort((a, b) => b[0].length - a[0].length);
+  const pick = (rest) => {
+    const r = rest.trim().toLowerCase();
+    const hit = names.find(([l]) => r.startsWith(l));
+    return hit ? hit[1] : null;
+  };
+  const have = new Set(entries.map((e) => `${e.habitId}|${e.start}`));
+  const out = [];
+  text.split('\n').forEach((line) => {
+    let m = RANGE_RE.exec(line);
+    if (m) {
+      const sh = +m[1], sm = +m[2], eh = +m[3], em = +m[4];
+      if (!validHM(sh, sm) || !validHM(eh, em)) return;
+      const h = pick(m[5]);
+      if (!h || h.kind !== 'timed') return;
+      let min = eh * 60 + em - (sh * 60 + sm);
+      if (min <= 0) min += 1440;
+      const stamp = `${date}T${pad(sh % 24)}:${pad(sm)}`;
+      if (have.has(`${h.id}|${stamp}`)) return;
+      out.push({ date, habitId: h.id, name: h.name, emoji: h.emoji, kind: 'timed', min, start: stamp });
+      return;
+    }
+    m = POINT_RE.exec(line);
+    if (m) {
+      const sh = +m[1], sm = +m[2];
+      if (!validHM(sh, sm)) return;
+      const h = pick(m[3]);
+      if (!h || h.kind !== 'check') return;
+      const stamp = `${date}T${pad(sh % 24)}:${pad(sm)}`;
+      if (have.has(`${h.id}|${stamp}`)) return;
+      out.push({ date, habitId: h.id, name: h.name, emoji: h.emoji, kind: 'check', min: 1, start: stamp });
+    }
+  });
+  return out;
+}
+
 async function copyText(text) {
   try {
     if (navigator.clipboard && window.isSecureContext) {
@@ -859,6 +908,19 @@ export default function App() {
     }
     return { out, more };
   }, [entries, data.days, day, pastN]);
+  const memoItems = useMemo(
+    () => Object.entries(data.days).flatMap(([d, v]) => parseMemo(d, v.text, habits, entries)),
+    [data.days, habits, entries]
+  );
+  const memoToday = useMemo(() => {
+    const m = new Map();
+    memoItems.filter((x) => x.date === day).forEach((x) => {
+      const cur = m.get(x.habitId) || { name: nm(x.habitId, x.name), emoji: x.emoji, kind: x.kind, min: 0 };
+      cur.min += x.min;
+      m.set(x.habitId, cur);
+    });
+    return [...m.values()];
+  }, [memoItems, day, nm]);
   const approxEntries = useMemo(
     () => entries.filter((e) => e.approx && e.start.slice(0, 10) === day).sort((a, b) => (a.start < b.start ? -1 : 1)),
     [entries, day]
@@ -887,8 +949,13 @@ export default function App() {
       cur.min += entryMin(e);
       m.set(e.habitId, cur);
     });
+    memoToday.filter((x) => x.kind === 'timed').forEach((x) => {
+      const cur = m.get(`memo:${x.name}`) || { name: x.name, emoji: x.emoji, min: 0 };
+      cur.min += x.min;
+      m.set(`memo:${x.name}`, cur);
+    });
     return [...m.values()].filter((x) => x.min > 0);
-  }, [dayEntries, day, nm]);
+  }, [dayEntries, day, nm, memoToday]);
 
   // 그 날(day)에서 지금(또는 하루 끝)까지 가장 늦게 끝난 기록의 끝 시각
   function lastEndOf(dayS, limitStamp) {
@@ -1155,6 +1222,25 @@ export default function App() {
               );
             })}
 
+            <div className="card diary memobox">
+              <h2 className="sec nomargin">{t('diaryTitle')}</h2>
+              <AutoTextarea
+                className="text area"
+                minRows={5}
+                placeholder={t('diaryPh')}
+                value={diaryText}
+                onChange={(e) => setDiary(day, e.target.value)}
+              />
+              {memoToday.length > 0 && (
+                <div className="totals memofound">
+                  <span className="hint nomargin">{t('memoFound')}</span>
+                  {memoToday.map((x) => (
+                    <span className="pill" key={x.name}>{x.emoji} {x.name} {x.kind === 'timed' ? fmtDur(x.min, lang) : t('timesN', { n: x.min })}</span>
+                  ))}
+                </div>
+              )}
+            </div>
+
             {editing && <p className="hint nomargin">{t('editHint')}</p>}
 
             {groupedHabits.map(({ g, list }, gi) => {
@@ -1318,17 +1404,6 @@ export default function App() {
               </>
             )}
 
-            <div className="card diary">
-              <h2 className="sec nomargin">{t('diaryTitle')}</h2>
-              <AutoTextarea
-                className="text area"
-                minRows={3}
-                placeholder={t('diaryPh')}
-                value={diaryText}
-                onChange={(e) => setDiary(day, e.target.value)}
-              />
-            </div>
-
             <div className="card summary">
               <div className="card-head">
                 <button className="memotoggle" aria-expanded={memoOpen} onClick={() => setMemoOpen(!memoOpen)}>
@@ -1348,7 +1423,17 @@ export default function App() {
           </>
         )}
 
-        {tab === 'stats' && <Stats entries={entries} habits={habits} today={today} />}
+        {tab === 'history' && (
+          <History
+            entries={entries}
+            days={data.days}
+            onOpenDay={(d) => { setDay(d); setTab('today'); window.scrollTo({ top: 0 }); }}
+            onOpenEntry={openEdit}
+            setDiary={setDiary}
+          />
+        )}
+
+        {tab === 'stats' && <Stats entries={entries} habits={habits} today={today} memoItems={memoItems} />}
 
         {tab === 'settings' && (
           <Settings
@@ -1373,6 +1458,7 @@ export default function App() {
         <nav className="tabbar">
           {[
             ['today', t('tabToday'), '🗓️'],
+            ['history', t('tabHistory'), '📖'],
             ['stats', t('tabStats'), '📊'],
             ['settings', t('tabSettings'), '⚙️'],
           ].map(([k, label, icon]) => (
@@ -2067,9 +2153,112 @@ function GroupSheet({ group, canDelete, onClose, onSave, onDelete }) {
   );
 }
 
+/* ───────────── 메모장: 모든 날을 쭉 훑어보고, 검색하고, 바로 고친다 ───────────── */
+
+function hl(text, q) {
+  if (!q) return text;
+  const lo = text.toLowerCase();
+  const ql = q.toLowerCase();
+  const out = [];
+  let i = 0;
+  let k = lo.indexOf(ql, i);
+  while (k >= 0) {
+    if (k > i) out.push(text.slice(i, k));
+    out.push(<mark key={k}>{text.slice(k, k + ql.length)}</mark>);
+    i = k + ql.length;
+    k = lo.indexOf(ql, i);
+  }
+  out.push(text.slice(i));
+  return out;
+}
+
+function History({ entries, days, onOpenDay, onOpenEntry, setDiary }) {
+  const { t, lang, nm } = useI18n();
+  const [q, setQ] = useState('');
+  const [n, setN] = useState(20);
+  const [editDay, setEditDay] = useState(null);
+  const query = q.trim();
+
+  const list = useMemo(() => {
+    const by = new Map();
+    entries.forEach((e) => {
+      const d = e.start.slice(0, 10);
+      if (!by.has(d)) by.set(d, []);
+      by.get(d).push(e);
+    });
+    const dates = new Set(by.keys());
+    Object.keys(days).forEach((d) => days[d].text.trim() && dates.add(d));
+    const ql = query.toLowerCase();
+    return [...dates]
+      .sort()
+      .reverse()
+      .map((d) => ({ d, list: (by.get(d) || []).sort((a, b) => (a.start < b.start ? -1 : 1)), memo: (days[d] || {}).text || '' }))
+      .filter(
+        (x) =>
+          !ql ||
+          x.memo.toLowerCase().includes(ql) ||
+          x.list.some((e) => `${e.name ? nm(e.habitId, e.name) : ''} ${e.note}`.toLowerCase().includes(ql))
+      );
+  }, [entries, days, query, nm]);
+
+  return (
+    <>
+      <header className="topbar"><h1>{t('tabHistory')}</h1></header>
+      <input
+        className="text searchbox"
+        type="search"
+        enterKeyHint="search"
+        placeholder={t('searchPh')}
+        value={q}
+        onChange={(e) => { setQ(e.target.value); setN(20); }}
+      />
+      {query && <p className="hint nomargin">{list.length ? t('foundDays', { n: list.length }) : t('noResult')}</p>}
+      {list.slice(0, n).map(({ d, list: rows, memo }) => (
+        <div className="card histcard" key={d}>
+          <button className="pasthead" onClick={() => onOpenDay(d)}>
+            <span>{dayLabel(d, lang)}</span>
+            <span className="pastgo">{t('pastOpen')} ›</span>
+          </button>
+          {rows.map((e) => {
+            const tm = e.approx ? t(`slot_${e.slot}`) : e.kind === 'check' ? hm(e.start) : `${hm(e.start)}–${e.end ? hm(e.end) : ''}`;
+            const label = e.name ? `${e.emoji} ${nm(e.habitId, e.name)}` : '';
+            const note = e.note.trim();
+            return (
+              <div className="histrow" role="button" tabIndex={0} key={e.id} onClick={() => onOpenEntry(e.id)}>
+                <span className="sofar-t">{tm}</span>
+                <span className="histtext">
+                  {label && <b>{hl(label, query)}</b>}
+                  {label && note ? ' ' : ''}
+                  {hl(note, query)}
+                </span>
+              </div>
+            );
+          })}
+          {editDay === d ? (
+            <AutoTextarea
+              className="text area histedit"
+              minRows={3}
+              autoFocus
+              value={memo}
+              onChange={(e) => setDiary(d, e.target.value)}
+              onBlur={() => setEditDay(null)}
+            />
+          ) : memo.trim() ? (
+            <div className="histmemo" role="button" tabIndex={0} onClick={() => setEditDay(d)}>{hl(memo, query)}</div>
+          ) : (
+            <button className="linkbtn" onClick={() => setEditDay(d)}>{t('writeMemo')}</button>
+          )}
+        </div>
+      ))}
+      {list.length > n && <button className="ghost wide" onClick={() => setN(n + 20)}>{t('pastMore')}</button>}
+      {list.length === 0 && !query && <p className="empty">{t('histEmpty')}</p>}
+    </>
+  );
+}
+
 /* ───────────── 통계 ───────────── */
 
-function Stats({ entries, habits, today }) {
+function Stats({ entries, habits, today, memoItems }) {
   const { t, lang, nm } = useI18n();
   const [range, setRange] = useState(7);
 
@@ -2092,8 +2281,15 @@ function Stats({ entries, habits, today }) {
       r.min += m;
       r.per[d] = (r.per[d] || 0) + m;
     });
+    (memoItems || []).forEach((x) => {
+      if (x.date < from || x.date > today || !map.has(x.habitId)) return;
+      const r = map.get(x.habitId);
+      r.count += 1;
+      r.min += x.min;
+      r.per[x.date] = (r.per[x.date] || 0) + x.min;
+    });
     return { days, list: [...map.values()] };
-  }, [entries, habits, today, range]);
+  }, [entries, habits, today, range, memoItems]);
 
   return (
     <>
