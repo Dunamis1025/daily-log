@@ -1226,6 +1226,8 @@ export default function App() {
               );
             })}
 
+            {/* 메모 칸은 이미 적어 둔 메모가 있는 날에만 보임 (새로 쓰는 건 메모장 탭에서) */}
+            {diaryText && (
             <div className="card diary memobox">
               <h2 className="sec nomargin">{t('diaryTitle')}</h2>
               <AutoTextarea
@@ -1244,6 +1246,7 @@ export default function App() {
                 </div>
               )}
             </div>
+            )}
 
             {editing && <p className="hint nomargin">{t('editHint')}</p>}
 
