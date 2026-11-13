@@ -366,3 +366,13 @@ mark { background: #ffe58a; color: #3b2a1d; border-radius: 3px; padding: 0 1px; 
   font: inherit; text-align: center; text-align-last: center; -webkit-appearance: none; appearance: none; border-radius: 10px;
 }
 .time.tsel .colon { font-weight: 700; color: var(--muted); }
+
+/* 알림 설정 */
+.pushcard .pushrow { margin-top: 8px; }
+.pushcard .pushrow .time { flex: 1; }
+.pushcard .btnrow { margin-top: 12px; }
+.pushcard .ghost { margin-top: 10px; }
+.pushcron { margin-top: 12px; }
+.pushcron summary { cursor: pointer; font-weight: 600; color: var(--muted); min-height: 36px; }
+.pushcron ol { padding-left: 20px; margin: 8px 0; }
+.pushcron input.text { font-size: 13px; }

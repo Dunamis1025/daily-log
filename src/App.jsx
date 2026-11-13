@@ -1,5 +1,6 @@
 import React, { useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { displayName, makeT } from './i18n';
+import { DEFAULT_TIMES, currentSubscription, disablePush, enablePush, isStandalone, pushEnv, pushInfo, testPush, updatePush } from './push';
 
 /* ───────────── 이 기기에만 저장하는 설정 (언어, 디자인) ─────────────
    기록과 달리 동기화하지 않는다. 폰은 한국어, 아이패드는 영어처럼 기기마다 다르게 둘 수 있다. */
@@ -12,6 +13,12 @@ const THEMES = [
 ];
 const THEME_BAR = { wood: '#f5efe4', pink: '#fff3f7', dark: '#0e0f12' };
 
+function cleanPushTimes(v) {
+  if (!Array.isArray(v)) return DEFAULT_TIMES;
+  const ok = v.filter((x) => typeof x === 'string' && /^([01]\d|2[0-3]):[0-5]\d$/.test(x));
+  return [...new Set(ok)].sort().slice(0, 6);
+}
+
 function loadPrefs() {
   try {
     const p = JSON.parse(localStorage.getItem(PREFS_KEY) || '{}');
@@ -20,9 +27,10 @@ function loadPrefs() {
       theme: THEMES.some((x) => x.id === p.theme) ? p.theme : 'wood',
       round5: p.round5 !== false, // 기록 추가에서 "지금"을 5분 단위로 맞춤 (기본 켬)
       homeGrid: p.homeGrid === true, // 오늘 화면에 자주 쓰는 항목 칸을 계속 보임 (기본 끔)
+      pushTimes: cleanPushTimes(p.pushTimes), // 알림 받을 시각 (이 기기)
     };
   } catch {
-    return { lang: 'ko', theme: 'wood', round5: true, homeGrid: false };
+    return { lang: 'ko', theme: 'wood', round5: true, homeGrid: false, pushTimes: DEFAULT_TIMES };
   }
 }
 function savePrefs(p) {
@@ -727,6 +735,35 @@ export default function App() {
 
   /* ── 기록 고치기 (고칠 때마다 수정 시각 u를 새로 찍는다) ── */
   const showToast = (msg, undo, act) => setToast({ msg, undo: undo || null, act: act || null });
+
+  /* 알림을 눌러 들어오면 바로 "뭐 했어요?" 창을 열어 줌 (주소의 ?add=1, 또는 이미 열려 있을 때 서비스워커가 보내는 메시지) */
+  const openAddRef = useRef(null);
+  openAddRef.current = openAdd;
+  const [pendingAdd, setPendingAdd] = useState(() => /[?&]add=1(&|$)/.test(window.location.search));
+  useEffect(() => {
+    if (/[?&]add=1(&|$)/.test(window.location.search)) {
+      try {
+        window.history.replaceState(null, '', window.location.pathname);
+      } catch {
+        /* 주소 정리는 못 해도 됨 */
+      }
+    }
+    if (!('serviceWorker' in navigator)) return undefined;
+    const onMsg = (e) => {
+      if (e.data && e.data.type === 'open-add') setPendingAdd(true);
+    };
+    navigator.serviceWorker.addEventListener('message', onMsg);
+    return () => navigator.serviceWorker.removeEventListener('message', onMsg);
+  }, []);
+  useEffect(() => {
+    if (!pendingAdd) return;
+    if (tab !== 'today') setTab('today');
+    else if (day !== today) setDay(today);
+    else {
+      setPendingAdd(false);
+      openAddRef.current();
+    }
+  }, [pendingAdd, tab, day, today]);
 
   const upsertEntry = (entry) =>
     setData((d) => {
@@ -2413,6 +2450,169 @@ function Stats({ entries, habits, today, memoItems }) {
 
 /* ───────────── 설정 / 언어 / 디자인 / 동기화 / 백업 ───────────── */
 
+/* ───────────── 알림 설정 ───────────── */
+
+function PushSettings({ syncKey, prefs, setPrefs, showToast }) {
+  const { t, lang } = useI18n();
+  const env = pushEnv();
+  const [on, setOn] = useState(null); // null: 확인 중, true/false
+  const [busy, setBusy] = useState(false);
+  const [info, setInfo] = useState(null); // { cronUrl, lastCron }
+  const times = prefs.pushTimes;
+
+  const refreshInfo = useCallback(async () => {
+    try {
+      setInfo(await pushInfo(syncKey));
+    } catch {
+      /* 서버가 안 열려 있으면 표시만 못 함 */
+    }
+  }, [syncKey]);
+
+  useEffect(() => {
+    let alive = true;
+    if (env !== 'ready' || !syncKey) return undefined;
+    currentSubscription().then((sub) => {
+      if (!alive) return;
+      setOn(!!sub && Notification.permission === 'granted');
+    });
+    return () => {
+      alive = false;
+    };
+  }, [env, syncKey]);
+
+  useEffect(() => {
+    if (on) refreshInfo();
+  }, [on, refreshInfo]);
+
+  const fail = (e) => {
+    const code = e && e.code;
+    const key = ['denied', 'auth', 'noserver', 'subscribe', 'gone', 'nosub', 'bad-sub'].includes(code) ? code.replace('-', '_') : 'failed';
+    showToast(t(`pushErr_${key}`));
+  };
+
+  async function turnOn() {
+    setBusy(true);
+    try {
+      const r = await enablePush(syncKey, times, lang);
+      setOn(true);
+      setInfo(r);
+      showToast(t('pushTurnedOn'));
+    } catch (e) {
+      fail(e);
+    } finally {
+      setBusy(false);
+    }
+  }
+  async function turnOff() {
+    setBusy(true);
+    try {
+      await disablePush(syncKey);
+      setOn(false);
+      showToast(t('pushTurnedOff'));
+    } catch (e) {
+      fail(e);
+    } finally {
+      setBusy(false);
+    }
+  }
+  async function sendTest() {
+    setBusy(true);
+    try {
+      await testPush(syncKey);
+      showToast(t('pushTestSent'));
+    } catch (e) {
+      if (e && e.code === 'gone') setOn(false);
+      fail(e);
+    } finally {
+      setBusy(false);
+    }
+  }
+  async function saveTimes(next) {
+    setPrefs((p) => ({ ...p, pushTimes: next }));
+    if (!on) return;
+    try {
+      await updatePush(syncKey, next, lang);
+    } catch (e) {
+      fail(e);
+    }
+  }
+  const setTimeAt = (i, v) => saveTimes(times.map((x, j) => (j === i ? v : x)));
+  const removeAt = (i) => saveTimes(times.filter((_, j) => j !== i));
+  const addTime = () => {
+    const free = ['08:00', '10:00', '13:00', '15:00', '17:00', '19:00', '20:00', '21:00', '22:00', '23:00'].find((x) => !times.includes(x));
+    if (free) saveTimes([...times, free].sort());
+  };
+  async function copyUrl() {
+    try {
+      await navigator.clipboard.writeText(info.cronUrl);
+      showToast(t('pushCopied'));
+    } catch {
+      showToast(t('pushCopyFail'));
+    }
+  }
+
+  const ago = info && info.lastCron ? Math.max(0, Math.round((Date.now() - info.lastCron) / 60000)) : null;
+  const cronOk = ago !== null && ago <= 15;
+
+  let body;
+  if (!syncKey) body = <p className="hint nomargin">{t('pushNeedSync')}</p>;
+  else if (env === 'install') body = <p className="hint nomargin">{t('pushInstall')}</p>;
+  else if (env === 'unsupported') body = <p className="hint nomargin">{t('pushUnsupported')}</p>;
+  else if (env === 'denied') body = <p className="hint nomargin">{t('pushDenied')}</p>;
+  else if (on === null) body = <p className="hint nomargin">…</p>;
+  else if (!on) {
+    body = (
+      <>
+        <p className="hint nomargin">{t('pushIntro')}</p>
+        <button className="primary wide" disabled={busy} onClick={turnOn}>{t('pushOn')}</button>
+      </>
+    );
+  } else {
+    body = (
+      <>
+        <div className="syncline ok">{t('pushIsOn')}</div>
+        <div className="label">{t('pushTimesLbl')}</div>
+        {times.map((tm, i) => (
+          <div className="timerow pushrow" key={i}>
+            <TimeField step5 ariaLabel={`${t('pushTimeAria')} ${i + 1}`} value={tm} onChange={(v) => v && setTimeAt(i, v)} />
+            <button className="mini" aria-label={t('pushRemove')} onClick={() => removeAt(i)}>✕</button>
+          </div>
+        ))}
+        {times.length < 5 && <button className="ghost" onClick={addTime}>{t('pushAddTime')}</button>}
+        <div className="btnrow">
+          <button className="primary" disabled={busy} onClick={sendTest}>{t('pushTest')}</button>
+          <button className="ghost" disabled={busy} onClick={turnOff}>{t('pushOff')}</button>
+        </div>
+        <div className={cronOk ? 'syncline ok' : 'syncline warn'}>
+          {cronOk ? t('pushCronOk', { n: ago }) : t('pushCronNo')}
+        </div>
+        {info && (
+          <details className="pushcron" open={!cronOk}>
+            <summary>{t('pushCronHow')}</summary>
+            <ol className="hint">
+              <li>{t('pushCron1')}</li>
+              <li>{t('pushCron2')}</li>
+              <li>{t('pushCron3')}</li>
+            </ol>
+            <input className="text" readOnly aria-label={t('pushCronUrl')} value={info.cronUrl} onFocus={(e) => e.target.select()} />
+            <div className="btnrow">
+              <button className="ghost" onClick={copyUrl}>{t('pushCopy')}</button>
+              <button className="ghost" onClick={refreshInfo}>{t('pushRecheck')}</button>
+            </div>
+          </details>
+        )}
+      </>
+    );
+  }
+
+  return (
+    <>
+      <h2 className="sec">{t('pushTitle')}</h2>
+      <div className="card pushcard">{body}</div>
+    </>
+  );
+}
+
 function Settings({
   data, groups, setData, prefs, setPrefs, syncStatus, onConnect, onDisconnect, onSyncNow, onResync,
   onEditHabit, onMove, onAddPhrase, onDeletePhrase, showToast,
@@ -2590,6 +2790,8 @@ function Settings({
           </>
         )}
       </div>
+
+      <PushSettings syncKey={data.sync.key} prefs={prefs} setPrefs={setPrefs} showToast={showToast} />
 
       <h2 className="sec">{t('myItems')}</h2>
       <ul className="list">
