@@ -1,6 +1,6 @@
 import React, { useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { displayName, makeT } from './i18n';
-import { DEFAULT_TIMES, currentSubscription, disablePush, enablePush, isStandalone, pushEnv, pushInfo, testPush, updatePush } from './push';
+import { DEFAULT_TIMES, clearEnd, currentSubscription, disablePush, enablePush, isStandalone, pushEnv, pushInfo, scheduleEnd, testPush, updatePush } from './push';
 
 /* ───────────── 이 기기에만 저장하는 설정 (언어, 디자인) ─────────────
    기록과 달리 동기화하지 않는다. 폰은 한국어, 아이패드는 영어처럼 기기마다 다르게 둘 수 있다. */
@@ -219,8 +219,58 @@ function normalizeEntry(e) {
     approx,
     slot,
     goal: kind === 'timed' ? goal : 0,
+    // 집중 블록: 시간을 정하고 시작한 기록. t0는 시작한 정확한 순간(ms)이라 남은 시간을 초 단위로 셈
+    auto: kind === 'timed' && goal > 0 && !!e.auto,
+    t0: kind === 'timed' && Number.isFinite(e.t0) && e.t0 > 0 ? Math.round(e.t0) : 0,
     u,
   };
+}
+
+// 집중 블록이 끝나는 순간(ms). t0가 시작 시각과 크게 어긋나면(시작 시각을 고친 경우) 시작 시각 기준
+function blockEndMs(e) {
+  const st = parseStamp(e.start).getTime();
+  const base = e.t0 && Math.abs(e.t0 - st) < 120000 ? e.t0 : st;
+  return base + e.goal * 60000;
+}
+
+const pad2 = (n) => String(n).padStart(2, '0');
+function fmtClock(sec) {
+  const s = Math.max(0, Math.ceil(sec));
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  return h > 0 ? `${h}:${pad2(m)}:${pad2(s % 60)}` : `${pad2(m)}:${pad2(s % 60)}`;
+}
+
+// 끝났을 때 울리는 소리 (아이폰은 화면을 한 번 눌러 둔 뒤에야 소리가 나므로, 시작 버튼을 누를 때 미리 깨워 둠)
+let audioCtx = null;
+function ensureAudio() {
+  try {
+    const AC = window.AudioContext || window.webkitAudioContext;
+    if (!AC) return null;
+    if (!audioCtx) audioCtx = new AC();
+    if (audioCtx.state === 'suspended') audioCtx.resume();
+    return audioCtx;
+  } catch {
+    return null;
+  }
+}
+function playChime() {
+  const ctx = ensureAudio();
+  if (!ctx) return;
+  const t0 = ctx.currentTime + 0.05;
+  [0, 0.4, 0.8, 2.2, 2.6, 3.0].forEach((d, i) => {
+    const osc = ctx.createOscillator();
+    const g = ctx.createGain();
+    osc.type = 'sine';
+    osc.frequency.value = i % 3 === 2 ? 1175 : 880;
+    g.gain.setValueAtTime(0.0001, t0 + d);
+    g.gain.exponentialRampToValueAtTime(0.35, t0 + d + 0.03);
+    g.gain.exponentialRampToValueAtTime(0.0001, t0 + d + 0.32);
+    osc.connect(g);
+    g.connect(ctx.destination);
+    osc.start(t0 + d);
+    osc.stop(t0 + d + 0.35);
+  });
 }
 
 function normalizeDay(date, d) {
@@ -568,6 +618,9 @@ export default function App() {
   const [goalFor, setGoalFor] = useState(null); // 목표 시간 고르는 칸이 열린 타이머 id
   const [goalCustom, setGoalCustom] = useState('');
   const goalSeen = useRef(new Set());
+  const finishing = useRef(new Set()); // 이미 끝 처리한 집중 블록
+  const [doneCard, setDoneCard] = useState(null); // 방금 끝난 집중 블록 { id, live }
+  const [full, setFull] = useState(false); // 큰 화면(집중 화면)
   const [pastN, setPastN] = useState(2); // 지난 기록을 몇 날 보여 줄지
   // 아이폰 홈 화면처럼: 항목을 길게 누르면 편집 모드(흔들리며 ✕)가 켜진다
   const pressed = useRef({ timer: null, x: 0, y: 0, fired: false });
@@ -739,9 +792,12 @@ export default function App() {
   /* 알림을 눌러 들어오면 바로 "뭐 했어요?" 창을 열어 줌 (주소의 ?add=1, 또는 이미 열려 있을 때 서비스워커가 보내는 메시지) */
   const openAddRef = useRef(null);
   openAddRef.current = openAdd;
-  const [pendingAdd, setPendingAdd] = useState(() => /[?&]add=1(&|$)/.test(window.location.search));
+  const openBlockRef = useRef(null);
+  const [pendingAdd, setPendingAdd] = useState(() =>
+    /[?&]start=1(&|$)/.test(window.location.search) ? 'start' : /[?&]add=1(&|$)/.test(window.location.search) ? 'add' : null
+  );
   useEffect(() => {
-    if (/[?&]add=1(&|$)/.test(window.location.search)) {
+    if (/[?&](add|start)=1(&|$)/.test(window.location.search)) {
       try {
         window.history.replaceState(null, '', window.location.pathname);
       } catch {
@@ -750,7 +806,9 @@ export default function App() {
     }
     if (!('serviceWorker' in navigator)) return undefined;
     const onMsg = (e) => {
-      if (e.data && e.data.type === 'open-add') setPendingAdd(true);
+      const d = e.data || {};
+      if (d.type === 'open-add') setPendingAdd('add');
+      else if (d.type === 'open-url') setPendingAdd(/[?&]start=1(&|$)/.test(String(d.url || '')) ? 'start' : /[?&]add=1(&|$)/.test(String(d.url || '')) ? 'add' : null);
     };
     navigator.serviceWorker.addEventListener('message', onMsg);
     return () => navigator.serviceWorker.removeEventListener('message', onMsg);
@@ -760,8 +818,9 @@ export default function App() {
     if (tab !== 'today') setTab('today');
     else if (day !== today) setDay(today);
     else {
-      setPendingAdd(false);
-      openAddRef.current();
+      setPendingAdd(null);
+      if (pendingAdd === 'start') openBlockRef.current();
+      else openAddRef.current();
     }
   }, [pendingAdd, tab, day, today]);
 
@@ -912,6 +971,133 @@ export default function App() {
     });
   }, [now, running, t, nm]);
 
+  /* ───── 집중 블록: 시간을 정하고 시작 → 남은 시간 → 끝나면 자동 기록 ───── */
+  const blocks = useMemo(() => running.filter((e) => e.auto && e.goal > 0), [running]);
+  const syncKeyNow = data.sync.key;
+
+  // 소리는 화면을 한 번 눌러 둬야 나므로, 아무 데나 처음 누를 때 미리 깨워 둠
+  useEffect(() => {
+    const wake = () => ensureAudio();
+    document.addEventListener('pointerdown', wake, { passive: true });
+    return () => document.removeEventListener('pointerdown', wake);
+  }, []);
+
+  // 진행 중인 블록이 있으면 초 단위로 갱신
+  useEffect(() => {
+    if (!blocks.length) return undefined;
+    const id = setInterval(() => {
+      if (document.visibilityState === 'visible') setNow(new Date());
+    }, 1000);
+    return () => clearInterval(id);
+  }, [blocks.length]);
+
+  // 진행 중에는 화면이 꺼지지 않게 (지원하는 기기만)
+  useEffect(() => {
+    if (!blocks.length || !('wakeLock' in navigator)) return undefined;
+    let lock = null;
+    let dead = false;
+    const ask = async () => {
+      try {
+        if (document.visibilityState !== 'visible') return;
+        const l = await navigator.wakeLock.request('screen');
+        if (dead) l.release().catch(() => {});
+        else lock = l;
+      } catch {
+        /* 허용 안 되는 기기는 그냥 넘어감 */
+      }
+    };
+    ask();
+    const vis = () => {
+      if (document.visibilityState === 'visible') ask();
+    };
+    document.addEventListener('visibilitychange', vis);
+    return () => {
+      dead = true;
+      document.removeEventListener('visibilitychange', vis);
+      if (lock) lock.release().catch(() => {});
+    };
+  }, [blocks.length]);
+
+  function finishBlock(e, live) {
+    let endStamp = stampStr(new Date(blockEndMs(e)));
+    if (endStamp < e.start) endStamp = e.start;
+    upsertEntry({ ...e, end: endStamp });
+    setDoneCard({ id: e.id, live });
+    setFull(false);
+    if (syncKeyNow) clearEnd(syncKeyNow, e.id);
+    if (live) {
+      playChime();
+      if (navigator.vibrate) navigator.vibrate([300, 150, 300, 150, 300]);
+    }
+  }
+
+  // 시간이 되면 자동으로 끝내고 기록 (앱을 닫아 둔 사이에 끝났으면, 다시 열 때 계획한 시간으로 기록)
+  useEffect(() => {
+    blocks.forEach((e) => {
+      if (finishing.current.has(e.id)) return;
+      const endMs = blockEndMs(e);
+      if (now.getTime() < endMs) return;
+      finishing.current.add(e.id);
+      finishBlock(e, now.getTime() - endMs < 10 * 60000);
+    });
+  }, [now, blocks]);
+
+  function openBlock() {
+    setSheet({ type: 'block' });
+  }
+  openBlockRef.current = openBlock;
+
+  function startBlock({ habitId, minutes, note }) {
+    const h = habits.find((x) => x.id === habitId);
+    if (!h || !(minutes > 0)) return;
+    ensureAudio();
+    const tm = new Date();
+    // 이미 진행 중인 것이 있으면 지금 시각으로 끝내고 이어서 시작 (한 번에 하나씩)
+    running.forEach((r) => {
+      let es = stampStr(tm);
+      if (es < r.start) es = r.start;
+      upsertEntry({ ...r, end: es });
+      if (r.auto && syncKeyNow) clearEnd(syncKeyNow, r.id);
+    });
+    const entry = {
+      id: uid(), habitId: h.id, name: h.name, emoji: h.emoji, kind: 'timed',
+      start: stampStr(tm), end: null, note: (note || '').trim(), approx: false, slot: 'all',
+      goal: Math.min(Math.round(minutes), 1440), auto: true, t0: tm.getTime(),
+    };
+    upsertEntry(entry);
+    setDoneCard(null);
+    setSheet(null);
+    setDay(dayStr(tm));
+    setNow(tm);
+    if (syncKeyNow) scheduleEnd(syncKeyNow, entry.id, blockEndMs(entry), nm(h.id, h.name), lang);
+  }
+
+  function extendBlock(e, minutes) {
+    const goal = Math.min(e.goal + minutes, 1440);
+    const next = { ...e, goal };
+    upsertEntry(next);
+    finishing.current.delete(e.id);
+    if (syncKeyNow) scheduleEnd(syncKeyNow, e.id, blockEndMs(next), nm(e.habitId, e.name), lang);
+    showToast(t('blockExtended', { n: minutes }));
+  }
+
+  // 방금 끝난 블록을 이어서 더 하기: 지금부터 minutes분 더
+  function extendDone(e, minutes) {
+    const goal = Math.min(Math.round((Date.now() - blockEndMs({ ...e, goal: 0 })) / 60000) + minutes, 1440);
+    const next = { ...e, end: null, goal };
+    upsertEntry(next);
+    finishing.current.delete(e.id);
+    setDoneCard(null);
+    setNow(new Date());
+    if (syncKeyNow) scheduleEnd(syncKeyNow, e.id, blockEndMs(next), nm(e.habitId, e.name), lang);
+  }
+
+  function cancelBlock(e) {
+    removeEntry(e.id);
+    if (syncKeyNow) clearEnd(syncKeyNow, e.id);
+    showToast(t('blockCanceled', { name: nm(e.habitId, e.name) }), () => upsertEntry(e));
+  }
+
   const dayEntries = useMemo(
     () =>
       entries
@@ -1028,6 +1214,8 @@ export default function App() {
         approx: !!e.approx,
         slot: e.slot || 'all',
         goal: e.goal || 0,
+        auto: !!e.auto,
+        t0: e.t0 || 0,
         ghost: e.habitId ? { id: e.habitId, name: e.name, emoji: e.emoji, kind: e.kind } : null,
       },
     });
@@ -1067,6 +1255,7 @@ export default function App() {
     if (endStamp < run.start) endStamp = run.start;
     const done = { ...run, end: endStamp };
     upsertEntry(done);
+    if (run.auto && syncKeyNow) clearEnd(syncKeyNow, run.id);
     const min = Math.max(0, Math.round((parseStamp(endStamp) - parseStamp(run.start)) / 60000));
     showToast(t('endedAfter', { name: nm(run.habitId, run.name), dur: fmtDur(min, lang) }), () => upsertEntry({ ...run, end: null }), {
       label: t('noteBtn'), fn: () => openEditEntry(done),
@@ -1203,7 +1392,44 @@ export default function App() {
               )}
             </div>
 
+            {doneCard && (() => {
+              const de = entries.find((x) => x.id === doneCard.id && x.end);
+              if (!de) return null;
+              return (
+                <DoneCard
+                  e={de}
+                  live={doneCard.live}
+                  onNote={(note) => upsertEntry({ ...de, note })}
+                  onMore={(n) => extendDone(de, n)}
+                  onNext={() => { setDoneCard(null); openBlock(); }}
+                  onEdit={() => openEditEntry(de)}
+                  onClose={() => setDoneCard(null)}
+                />
+              );
+            })()}
+
+            {blocks.length === 0 && (
+              <button className="primary wide startbtn" onClick={openBlock}>
+                <span>{t('startBlock')}</span>
+                <span className="addhint">{t('startBlockHint')}</span>
+              </button>
+            )}
+
             {running.map((e) => {
+              if (e.auto && e.goal > 0) {
+                return (
+                  <BlockCard
+                    key={e.id}
+                    e={e}
+                    now={now}
+                    onFull={() => setFull(true)}
+                    onExtend={(n) => extendBlock(e, n)}
+                    onEarly={() => stop(e)}
+                    onCancel={() => cancelBlock(e)}
+                    onEdit={() => openEditEntry(e)}
+                  />
+                );
+              }
               const el = Math.max(0, Math.round((now - parseStamp(e.start)) / 60000));
               const left = e.goal ? e.goal - el : 0;
               return (
@@ -1356,7 +1582,7 @@ export default function App() {
               <button className="ghost wide" onClick={() => setSheet({ type: 'group', group: null })}>{t('addGroup')}</button>
             )}
 
-            <button className="primary wide addbtn" onClick={openAdd}>
+            <button className="ghost wide addbtn" onClick={openAdd}>
               <span>{t('addEntry')}</span>
               <span className="addhint">
                 {prevEndHint ? t('addHintPrev', { time: hm(prevEndHint) }) : t('addHintNone')}
@@ -1525,6 +1751,29 @@ export default function App() {
               )}
             </span>
           </div>
+        )}
+
+        {full && blocks[0] && (
+          <BlockCard
+            full
+            e={blocks[0]}
+            now={now}
+            onFull={() => setFull(false)}
+            onExtend={(n) => extendBlock(blocks[0], n)}
+            onEarly={() => { setFull(false); stop(blocks[0]); }}
+            onCancel={() => { setFull(false); cancelBlock(blocks[0]); }}
+          />
+        )}
+
+        {sheet && sheet.type === 'block' && (
+          <BlockSheet
+            habits={habits}
+            entries={entries}
+            defaultGroup={groups[0].id}
+            onClose={() => setSheet(null)}
+            onStart={startBlock}
+            onCreateHabit={(h) => saveHabit(h, true)}
+          />
         )}
 
         {sheet && sheet.type === 'entry' && (
@@ -1769,6 +2018,187 @@ function newHabitFrom(v, fallbackGroup) {
   return { id: `h-${uid()}`, name: v.name.trim(), emoji: v.emoji, kind: v.kind, group: v.group || fallbackGroup || MAIN_GROUP };
 }
 
+/* ───────────── 집중 블록 ───────────── */
+
+function BlockCard({ e, now, full, onFull, onExtend, onEarly, onCancel, onEdit }) {
+  const { t, lang, nm } = useI18n();
+  const endMs = blockEndMs(e);
+  const totalMs = e.goal * 60000;
+  const remMs = Math.max(0, endMs - now.getTime());
+  const pct = Math.min(100, Math.max(0, (1 - remMs / totalMs) * 100));
+  const remSec = remMs / 1000;
+  const endTime = timeStr(new Date(endMs));
+  const body = (
+    <>
+      <div className="bc-top">
+        <div className="bc-name">{e.emoji} {nm(e.habitId, e.name)}</div>
+        <button className="linkbtn" onClick={onFull}>{full ? t('blockSmall') : t('blockBig')}</button>
+      </div>
+      {e.note && <div className="bc-note">{e.note}</div>}
+      <div className="bc-clock" role="timer" aria-label={t('blockLeftAria', { time: fmtClock(remSec) })}>{fmtClock(remSec)}</div>
+      <div className="bc-left">{t('blockLeftLbl')}</div>
+      <div className="gbar bc-bar" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(pct)}>
+        <i style={{ width: `${pct}%` }} />
+      </div>
+      <div className="bc-range">{t('blockRange', { from: e.start.slice(11), to: endTime, dur: fmtDur(e.goal, lang) })}</div>
+      <div className="bc-actions">
+        <button className="chip" onClick={() => onExtend(5)}>{t('blockPlus', { n: 5 })}</button>
+        <button className="chip" onClick={() => onExtend(10)}>{t('blockPlus', { n: 10 })}</button>
+        <button className="chip" onClick={() => onExtend(15)}>{t('blockPlus', { n: 15 })}</button>
+        <button className="stopbtn bc-early" onClick={onEarly}>{t('blockEarly')}</button>
+      </div>
+      <div className="runlinks">
+        {onEdit && <button className="linkbtn" onClick={onEdit}>{t('editRun')}</button>}
+        <button className="linkbtn" onClick={onCancel}>{t('blockCancel')}</button>
+      </div>
+    </>
+  );
+  if (full) return <div className="blockcard full" role="dialog" aria-modal="true">{body}</div>;
+  return <div className="running col blockcard">{body}</div>;
+}
+
+function DoneCard({ e, live, onNote, onMore, onNext, onEdit, onClose }) {
+  const { t, lang, nm } = useI18n();
+  const min = Math.max(0, Math.round((parseStamp(e.end) - parseStamp(e.start)) / 60000));
+  return (
+    <div className="card donecard">
+      <div className="dc-title">{t('blockDoneTitle', { name: `${e.emoji} ${nm(e.habitId, e.name)}`.trim(), dur: fmtDur(min, lang) })}</div>
+      <div className="hint nomargin">
+        {t('blockDoneRange', { from: e.start.slice(11), to: e.end.slice(11) })}
+        {!live && ` · ${t('blockDoneAway')}`}
+      </div>
+      <AutoTextarea
+        className="text area"
+        minRows={2}
+        placeholder={t('blockNoteLbl')}
+        aria-label={t('blockNoteLbl')}
+        value={e.note}
+        onChange={(ev) => onNote(ev.target.value)}
+      />
+      <div className="bc-actions">
+        {live && <button className="chip" onClick={() => onMore(10)}>{t('blockMore', { n: 10 })}</button>}
+        <button className="primary" onClick={onNext}>{t('blockNext')}</button>
+        <button className="ghost" onClick={onEdit}>{t('blockFix')}</button>
+        <button className="linkbtn" onClick={onClose}>{t('close')}</button>
+      </div>
+    </div>
+  );
+}
+
+const BLOCK_PRESETS = [15, 25, 30, 45, 60, 90, 120];
+
+function BlockSheet({ habits, entries, defaultGroup, onClose, onStart, onCreateHabit }) {
+  const { t, lang, nm } = useI18n();
+  const timed = habits.filter((h) => h.kind === 'timed');
+  const byRecent = [...entries].filter((e) => e.habitId && e.kind === 'timed' && !e.approx).sort((a, b) => (a.start < b.start ? 1 : -1));
+  const lastGoalOf = (id) => {
+    const x = byRecent.find((e) => e.habitId === id && e.goal > 0);
+    return x ? x.goal : 60;
+  };
+  const initial = (() => {
+    const blk = byRecent.find((e) => e.auto && timed.some((h) => h.id === e.habitId));
+    const any = byRecent.find((e) => timed.some((h) => h.id === e.habitId));
+    return (blk || any || {}).habitId || (timed[0] ? timed[0].id : '');
+  })();
+  const [habitId, setHabitId] = useState(initial);
+  const [minutes, setMinutes] = useState(initial ? lastGoalOf(initial) : 60);
+  const [custom, setCustom] = useState('');
+  const [note, setNote] = useState('');
+  const [creating, setCreating] = useState(false);
+  const [hv, setHv] = useState({ name: '', emoji: '', kind: 'timed' });
+  const touched = useRef(false);
+
+  const pickHabit = (id) => {
+    setHabitId(id);
+    if (!touched.current) {
+      setMinutes(lastGoalOf(id));
+      setCustom('');
+    }
+  };
+  const pickMinutes = (m) => {
+    touched.current = true;
+    setMinutes(m);
+    setCustom('');
+  };
+  const typeCustom = (v) => {
+    touched.current = true;
+    setCustom(v);
+    const n = Math.round(Number(v));
+    if (n > 0) setMinutes(Math.min(n, 1440));
+  };
+  function makeHabit() {
+    if (!hv.name.trim()) return;
+    const h = newHabitFrom({ ...hv, kind: 'timed' }, defaultGroup);
+    onCreateHabit(h);
+    setHabitId(h.id);
+    setCreating(false);
+    setHv({ name: '', emoji: '', kind: 'timed' });
+  }
+  const ok = !!habitId && minutes > 0;
+
+  return (
+    <div className="overlay" onClick={onClose}>
+      <div className="sheet" role="dialog" aria-modal="true" onClick={(e) => e.stopPropagation()}>
+        <div className="sheet-head">
+          <h2>{t('blockTitle')}</h2>
+          <button className="linkbtn" onClick={onClose}>{t('close')}</button>
+        </div>
+
+        <div className="label">{t('blockWhat')}</div>
+        <div className="chips">
+          {timed.map((h) => (
+            <button key={h.id} className={habitId === h.id ? 'chip sel' : 'chip'} onClick={() => pickHabit(h.id)}>
+              {h.emoji} {nm(h.id, h.name)}
+            </button>
+          ))}
+          <button className={creating ? 'chip sel' : 'chip dashed'} onClick={() => setCreating(!creating)}>{t('plusItem')}</button>
+        </div>
+        {creating && (
+          <div className="inline-new">
+            <HabitFields v={hv} lockKind onChange={(p) => setHv({ ...hv, ...p })} />
+            <button className="primary wide" disabled={!hv.name.trim()} onClick={makeHabit}>{t('makeItem')}</button>
+          </div>
+        )}
+
+        <div className="label">{t('blockHow')}</div>
+        <div className="chips">
+          {BLOCK_PRESETS.map((m) => (
+            <button key={m} className={minutes === m && !custom ? 'chip sel' : 'chip'} onClick={() => pickMinutes(m)}>{fmtDur(m, lang)}</button>
+          ))}
+        </div>
+        <div className="timerow phrase-new">
+          <input
+            className="text"
+            type="number"
+            inputMode="numeric"
+            min="1"
+            max="1440"
+            placeholder={t('blockCustomPh')}
+            aria-label={t('blockCustomPh')}
+            value={custom}
+            onChange={(e) => typeCustom(e.target.value)}
+          />
+        </div>
+
+        <div className="label">{t('blockNoteAsk')}</div>
+        <input
+          className="text"
+          placeholder={t('blockNotePh')}
+          aria-label={t('blockNoteAsk')}
+          maxLength={200}
+          value={note}
+          onChange={(e) => setNote(e.target.value)}
+          onKeyDown={(e) => e.key === 'Enter' && ok && onStart({ habitId, minutes, note })}
+        />
+
+        <button className="primary wide blockgo" disabled={!ok} onClick={() => onStart({ habitId, minutes, note })}>
+          {ok ? t('blockGo', { dur: fmtDur(minutes, lang) }) : t('blockNeedItem')}
+        </button>
+      </div>
+    </div>
+  );
+}
+
 /* ───────────── 기록 추가/수정 시트 ───────────── */
 
 const DURATIONS = [15, 30, 45, 60, 90, 120];
@@ -1948,6 +2378,8 @@ function EntrySheet({ habits, phrases, defaultGroup, draft, isNew, prevEnd, entr
       approx: false,
       slot: 'all',
       goal: f.goal || 0,
+      auto: !!f.auto,
+      t0: f.t0 || 0,
     });
   }
 

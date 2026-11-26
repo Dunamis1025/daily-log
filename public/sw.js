@@ -15,21 +15,21 @@ self.addEventListener('push', (e) => {
       tag: d.tag || 'dailylog',
       icon: '/icon-192.png',
       badge: '/icon-192.png',
-      data: { url: d.url || '/?add=1' },
+      data: { url: d.url || '/?start=1' },
     })
   );
 });
 
 self.addEventListener('notificationclick', (e) => {
   e.notification.close();
-  const url = (e.notification.data && e.notification.data.url) || '/?add=1';
+  const url = (e.notification.data && e.notification.data.url) || '/?start=1';
   e.waitUntil(
     (async () => {
       const list = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
       for (const c of list) {
         if ('focus' in c) {
           await c.focus();
-          c.postMessage({ type: 'open-add' }); // 이미 열려 있으면 그대로 "뭐 했어요?" 창을 열어 줌
+          c.postMessage({ type: 'open-url', url }); // 이미 열려 있으면 알림이 가리키는 창(?start=1 등)을 열어 줌
           return;
         }
       }

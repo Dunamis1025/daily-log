@@ -376,3 +376,31 @@ mark { background: #ffe58a; color: #3b2a1d; border-radius: 3px; padding: 0 1px; 
 .pushcron summary { cursor: pointer; font-weight: 600; color: var(--muted); min-height: 36px; }
 .pushcron ol { padding-left: 20px; margin: 8px 0; }
 .pushcron input.text { font-size: 13px; }
+
+/* 집중 블록: 시간을 정하고 시작 */
+.startbtn { display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 72px; font-size: 20px; margin-top: 0; }
+.startbtn .addhint { font-size: 13px; font-weight: 400; opacity: 0.85; }
+.blockcard { gap: 6px; align-items: stretch; text-align: center; }
+.bc-top { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.bc-name { font-weight: 700; font-size: 18px; text-align: left; }
+.bc-note { color: var(--muted); font-size: 15px; text-align: left; }
+.bc-clock { font-variant-numeric: tabular-nums; font-weight: 700; letter-spacing: 1px; font-size: clamp(56px, 18vw, 120px); line-height: 1.05; margin-top: 4px; }
+.bc-left { color: var(--muted); font-size: 14px; margin-top: -4px; }
+.bc-bar { height: 14px; margin: 6px 0; }
+.bc-range { color: var(--muted); font-size: 14px; }
+.bc-actions { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; align-items: center; margin-top: 6px; }
+.bc-early { min-height: 44px; }
+.blockcard .runlinks { justify-content: center; }
+.blockcard.full {
+  position: fixed; inset: 0; z-index: 60; background: var(--bg); display: flex; flex-direction: column;
+  justify-content: center; padding: 24px max(24px, env(safe-area-inset-left)); gap: 10px;
+}
+.blockcard.full .bc-name { font-size: 26px; text-align: center; }
+.blockcard.full .bc-top { flex-direction: column; }
+.blockcard.full .bc-note { font-size: 20px; text-align: center; }
+.blockcard.full .bc-clock { font-size: clamp(88px, 26vw, 260px); }
+.blockcard.full .bc-left, .blockcard.full .bc-range { font-size: 18px; }
+.blockcard.full .bc-bar { height: 20px; }
+.donecard { display: flex; flex-direction: column; gap: 8px; border: 1px solid var(--accent); }
+.dc-title { font-weight: 700; font-size: 18px; }
+.blockgo { margin-top: 16px; min-height: 56px; font-size: 18px; }

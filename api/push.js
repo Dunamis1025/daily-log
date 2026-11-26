@@ -12,6 +12,9 @@ const crypto = require('crypto');
 const HASH = 'dailylog:push'; // id(구독 주소의 해시) -> {sub, times, tz, lang, u}
 const META = 'dailylog:push:meta'; // vapid 키 (JSON)
 const LASTCRON = 'dailylog:push:lastcron';
+const TIMERS = 'dailylog:push:timers'; // 집중 블록이 끝날 때 보낼 알림 (기기id:기록id -> {sid, at, label, lang})
+const MAX_TIMERS = 40;
+const TIMER_LATE_MIN = 45; // 이 시간보다 늦게 처리하게 된 예약은 그냥 버림
 const MAX_SUBS = 20;
 const MAX_TIMES = 6;
 const GRACE_MIN = 20; // 정해진 시각 뒤 20분 안에는 (타이머가 한두 번 놓쳐도) 보냄. 같은 시각은 하루 한 번만.
@@ -126,9 +129,14 @@ function localNow(tz, now) {
 }
 
 const MSG = {
-  ko: ['뭐 했어요? 지금 바로 적어 볼까요?', '방금 한 일, 잊기 전에 적어 둘까요?', '오늘 뭐 했는지 한 줄만 남겨 볼까요?'],
-  en: ['What did you do? Log it now?', 'Jot down what you just did before you forget.', 'Leave a quick line about your day?'],
+  ko: ['지금부터 뭐 할까요? 시간을 정하고 시작해 볼까요?', '다음에 할 일을 정하고 타이머를 켜 볼까요?', '지금 시간, 어디에 쓸까요? 하나 골라 시작해요'],
+  en: ['What will you do next? Pick it and start a timer.', 'Set a time for your next task and start.', 'Where should this time go? Pick one and begin.'],
 };
+const END_MSG = {
+  ko: (label) => `⏰ ${label} 시간이 끝났어요! 수고했어요`,
+  en: (label) => `⏰ Time is up for ${label}. Nice work!`,
+};
+const cleanLabel = (x) => String(x || '').replace(/[\u0000-\u001f\u007f]/g, ' ').trim().slice(0, 40);
 const TITLE = { ko: '일과 기록', en: 'Daily Log' };
 const TEST_MSG = { ko: '알림이 잘 와요! 🎉', en: 'Notifications work! 🎉' };
 
@@ -202,7 +210,7 @@ module.exports = async function handler(req, res) {
             const bodies = MSG[lang];
             try {
               await sendOne(vapid, subject, j.rec.sub, {
-                title: TITLE[lang], body: bodies[Math.floor(Math.random() * bodies.length)], url: '/?add=1', tag: 'dailylog-nudge',
+                title: TITLE[lang], body: bodies[Math.floor(Math.random() * bodies.length)], url: '/?start=1', tag: 'dailylog-nudge',
               });
               sent += 1;
             } catch (e) {
@@ -213,7 +221,43 @@ module.exports = async function handler(req, res) {
             }
           })
         );
-        return send(200, { ok: true, checked, due: jobs.length, sent, removed });
+
+        // 집중 블록 끝 알림: 정해진 순간이 지난 것을 한 번만 보냄 (HDEL이 1을 돌려준 쪽만 보냄 → 타이머가 겹쳐 불려도 한 번)
+        const [tflat] = await pipeline(conf, [['HGETALL', TIMERS]]);
+        let timersSent = 0;
+        const tjobs = [];
+        for (let i = 0; i < (tflat || []).length; i += 2) {
+          let tr;
+          try {
+            tr = JSON.parse(tflat[i + 1]);
+          } catch {
+            tjobs.push({ field: tflat[i], drop: true });
+            continue;
+          }
+          if (tr.at <= nowMs) tjobs.push({ field: tflat[i], tr, drop: nowMs - tr.at > TIMER_LATE_MIN * 60000 });
+        }
+        await Promise.all(
+          tjobs.map(async (j) => {
+            const [del] = await pipeline(conf, [['HDEL', TIMERS, j.field]]);
+            if (Number(del) !== 1 || j.drop) return;
+            const [raw] = await pipeline(conf, [['HGET', HASH, j.tr.sid]]);
+            if (!raw) return;
+            const rec = JSON.parse(raw);
+            const lang = j.tr.lang === 'en' ? 'en' : 'ko';
+            try {
+              await sendOne(vapid, subject, rec.sub, {
+                title: TITLE[lang], body: END_MSG[lang](cleanLabel(j.tr.label) || (lang === 'en' ? 'this block' : '이번 시간')), url: '/?done=1', tag: 'dailylog-end',
+              });
+              timersSent += 1;
+            } catch (e) {
+              if (e && (e.statusCode === 404 || e.statusCode === 410)) {
+                await pipeline(conf, [['HDEL', HASH, j.tr.sid]]);
+                removed += 1;
+              }
+            }
+          })
+        );
+        return send(200, { ok: true, checked, due: jobs.length, sent, removed, timersSent });
       }
       const v = await getVapid(conf);
       return send(200, { publicKey: v.publicKey });
@@ -243,6 +287,26 @@ module.exports = async function handler(req, res) {
       const rec = { sub, times, tz, lang: body.lang === 'en' ? 'en' : 'ko', u: Date.now() };
       await pipeline(conf, [['HSET', HASH, id, JSON.stringify(rec)]]);
       return send(200, { ok: true, cronUrl, lastCron });
+    }
+
+    if (body.action === 'timer-set') {
+      if (typeof body.endpoint !== 'string' || typeof body.id !== 'string' || !body.id || body.id.length > 60) return send(400, { error: 'bad-timer' });
+      const at = Number(body.at);
+      const nowMs = Date.now();
+      if (!Number.isFinite(at) || at < nowMs - 60000 || at > nowMs + 25 * 3600000) return send(400, { error: 'bad-timer' });
+      const sid = idOf(body.endpoint);
+      const field = `${sid}:${body.id}`;
+      const [rec, len, has] = await pipeline(conf, [['HEXISTS', HASH, sid], ['HLEN', TIMERS], ['HEXISTS', TIMERS, field]]);
+      if (!rec) return send(404, { error: 'not-subscribed' });
+      if (!has && Number(len) >= MAX_TIMERS) return send(429, { error: 'too-many' });
+      await pipeline(conf, [['HSET', TIMERS, field, JSON.stringify({ sid, at: Math.round(at), label: cleanLabel(body.label), lang: body.lang === 'en' ? 'en' : 'ko' })]]);
+      return send(200, { ok: true });
+    }
+
+    if (body.action === 'timer-clear') {
+      if (typeof body.endpoint !== 'string' || typeof body.id !== 'string') return send(400, { error: 'bad-timer' });
+      await pipeline(conf, [['HDEL', TIMERS, `${idOf(body.endpoint)}:${body.id}`]]);
+      return send(200, { ok: true });
     }
 
     if (body.action === 'unsubscribe') {

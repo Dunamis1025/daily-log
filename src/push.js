@@ -130,3 +130,27 @@ export async function testPush(key) {
 export function pushInfo(key) {
   return call('POST', key, { action: 'info' });
 }
+
+// 집중 블록이 끝나는 시각에 알림을 보내 달라고 서버에 예약 (이 기기에 알림이 켜져 있을 때만, 실패해도 조용히 넘어감)
+export async function scheduleEnd(key, id, atMs, label, lang) {
+  try {
+    if (!pushSupported() || Notification.permission !== 'granted') return;
+    const sub = await currentSubscription();
+    if (!sub) return;
+    await call('POST', key, { action: 'timer-set', endpoint: sub.endpoint, id, at: Math.round(atMs), label, lang });
+  } catch {
+    /* 예약이 안 돼도 앱 안의 알람은 그대로 울림 */
+  }
+}
+
+export async function clearEnd(key, id) {
+  try {
+    if (!pushSupported()) return;
+    const sub = await currentSubscription();
+    if (!sub) return;
+    await call('POST', key, { action: 'timer-clear', endpoint: sub.endpoint, id });
+  } catch {
+    /* 무시 */
+  }
+}
+
